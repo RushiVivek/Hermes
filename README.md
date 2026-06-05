@@ -1,36 +1,41 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# hermes
 
-## Getting Started
+Family-facing certificate / document vault. Mobile-first PWA. Plain language for non-technical users.
 
-First, run the development server:
+## Stack
+- Next.js 16 (App Router) + TypeScript + Tailwind 4
+- Firestore (Firebase, Spark/free) for metadata
+- Buzzheavier for blob storage (deferred to v1)
+- Gemini for auto-organize and chat (deferred to v1/v2)
+- Hosted on Vercel
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Local setup
+
+```sh
+mise install            # picks up Node 24 from .mise.toml
+npm install
+cp .env.local.example .env.local
+# fill in HERMES_PASSWORD, SESSION_SECRET, FIREBASE_SERVICE_ACCOUNT
+npm run seed            # populates Firestore with ~10 fixture docs
+npm run dev             # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Env vars
+| Var | Required | Purpose |
+|---|---|---|
+| `HERMES_PASSWORD` | yes | Shared family vault password. |
+| `SESSION_SECRET` | yes | 32+ char random string; signs session cookies. |
+| `FIREBASE_SERVICE_ACCOUNT` | yes | Service-account JSON (entire object as a single string). |
+| `BUZZHEAVIER_ACCOUNTS` | v1+ | JSON `[{id, rootDir}]` of Buzzheavier accounts. |
+| `BUZZHEAVIER_ACTIVE_INDEX` | v1+ | Which account new uploads go to. |
+| `GEMINI_API_KEY` | v1+ | Gemini API key. |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## v0 surface (current)
+- Login (shared password)
+- Browse (gdrive-style, mobile-first) backed by seeded Firestore data
+- Doc detail page
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Upload, auto-organize, and chat come in v1/v2.
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Mobile testing
+Test every screen at 360×640 in Chrome devtools first. Touch targets ≥ 44px. No hover-only affordances.
