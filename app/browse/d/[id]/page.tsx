@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { docsCol, fromFirestore } from "@/lib/firestore";
+import DeleteButton from "./DeleteButton";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,10 @@ export default async function DocDetailPage({
         <Row label="Added" value={new Date(doc.uploaded_at).toLocaleDateString()} />
         {doc.uploaded_by && <Row label="Added from" value={doc.uploaded_by} />}
       </dl>
+
+      <div className="mt-8">
+        <DeleteButton docId={doc.id} parentPath={doc.path} title={doc.title} />
+      </div>
     </div>
   );
 }
