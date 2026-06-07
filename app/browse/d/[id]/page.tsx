@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { docsCol, fromFirestore } from "@/lib/firestore";
+import { formatBytes } from "@/lib/format";
 import DeleteButton from "./DeleteButton";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +12,16 @@ export default async function DocDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const snap = await docsCol.doc(id).get();
+  // Firestore throws synchronously on invalid IDs like "." or "..". Scope the
+  // try/catch to ref construction so transient .get() failures (network,
+  // quota, auth) still surface as 500 instead of being silently 404'd.
+  let ref: FirebaseFirestore.DocumentReference;
+  try {
+    ref = docsCol().doc(id);
+  } catch {
+    return notFound();
+  }
+  const snap = await ref.get();
   if (!snap.exists) return notFound();
   const doc = fromFirestore(snap.id, snap.data()!);
   if (doc.status !== "active") return notFound();
@@ -28,7 +38,7 @@ export default async function DocDetailPage({
       <h1 className="mt-3 text-xl font-semibold">{doc.title}</h1>
 
       <a
-        href={doc.buzzheavier_url}
+        href={withCacheBuster(doc.buzzheavier_url)}
         target="_blank"
         rel="noreferrer"
         className="mt-4 block rounded-xl border border-zinc-200 bg-white p-6 text-center text-sm font-medium active:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:active:bg-zinc-800"
@@ -66,8 +76,15 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+/** Append a unique cache-buster query param so Cloudflare's per-URL cache
+ * can't keep replaying a stale 403 / challenge HTML for the same blob. The
+ * server resolves the path identically, so this is invisible to Buzzheavier
+ * and only affects the CDN edge. */
+function withCacheBuster(url: string): string {
+  const sep = url.includes("?") ? "&" : "?";
+  // Server-rendered: a per-render nonce is enough; client doesn't need to
+  // mutate the URL after hydration since the user only clicks once.
+  const nonce = Math.random().toString(36).slice(2, 10);
+  return `${url}${sep}_=${nonce}`;
 }
+

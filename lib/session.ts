@@ -41,8 +41,12 @@ export async function isAuthed(): Promise<boolean> {
   const store = await cookies();
   const token = store.get(COOKIE_NAME)?.value;
   if (!token) return false;
+  // Get the secret BEFORE the try/catch so a config error (missing/short
+  // SESSION_SECRET) propagates as a 500 instead of looking like a normal
+  // failed auth — otherwise the user just sees a redirect loop with no log.
+  const secret = getSecret();
   try {
-    await jwtVerify(token, getSecret());
+    await jwtVerify(token, secret);
     return true;
   } catch {
     return false;
@@ -51,8 +55,9 @@ export async function isAuthed(): Promise<boolean> {
 
 export async function isAuthedFromToken(token?: string): Promise<boolean> {
   if (!token) return false;
+  const secret = getSecret();
   try {
-    await jwtVerify(token, getSecret());
+    await jwtVerify(token, secret);
     return true;
   } catch {
     return false;

@@ -14,9 +14,17 @@ export function joinPath(parts: string[]): string {
   return parts.join("/");
 }
 
+/** Strip leading/trailing/duplicate slashes so URL-shaped variants like
+ * "/Education/", "Education//Aarav", "//Education" all canonicalize to the
+ * same string the rest of the helpers expect. */
+function normalize(path: string): string {
+  return joinPath(splitPath(path));
+}
+
 export function isUnderPath(docPath: string, currentPath: string): boolean {
-  if (currentPath === "") return true;
-  return docPath === currentPath || docPath.startsWith(currentPath + "/");
+  const c = normalize(currentPath);
+  if (c === "") return true;
+  return docPath === c || docPath.startsWith(c + "/");
 }
 
 /**

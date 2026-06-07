@@ -10,7 +10,14 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const ref = docsCol.doc(id);
+  // Firestore throws synchronously on ids like "." or ".." — coerce those to a
+  // 404 before they bubble up as a 500 with a leaky message.
+  let ref: FirebaseFirestore.DocumentReference;
+  try {
+    ref = docsCol().doc(id);
+  } catch {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   const snap = await ref.get();
   if (!snap.exists) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });

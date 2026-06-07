@@ -1,4 +1,4 @@
-import { docsCol, db } from "@/lib/firestore";
+import { docsCol, getDb } from "@/lib/firestore";
 import { Timestamp } from "firebase-admin/firestore";
 import type { Doc } from "@/lib/types";
 
@@ -149,7 +149,9 @@ const seeds: Seed[] = [
 ];
 
 async function main() {
-  const existing = await docsCol.where("buzzheavier_account_id", "==", FAKE_ACCOUNT).get();
+  const db = getDb();
+  const col = docsCol();
+  const existing = await col.where("buzzheavier_account_id", "==", FAKE_ACCOUNT).get();
   if (!existing.empty) {
     console.log(`Deleting ${existing.size} existing seed docs…`);
     const batch = db.batch();
@@ -159,7 +161,7 @@ async function main() {
 
   const batch = db.batch();
   for (const s of seeds) {
-    const ref = docsCol.doc();
+    const ref = col.doc();
     batch.set(ref, { ...s, uploaded_at: Timestamp.now() });
   }
   await batch.commit();

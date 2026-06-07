@@ -2,13 +2,17 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Match Tailwind's zinc-50 / zinc-950 so the values agree with both the
+ * `bg-zinc-50 dark:bg-zinc-950` utilities on <body> AND the <meta name="theme-color">
+ * tags in layout.tsx — otherwise the mobile address-bar tint visibly seams
+ * against the page background. */
 :root {
-  --background: #ffffff;
+  --background: #fafafa;
   --foreground: #171717;
 }
 
 .dark {
-  --background: #0a0a0a;
+  --background: #09090b;
   --foreground: #ededed;
 }
 

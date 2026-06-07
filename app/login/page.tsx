@@ -1,12 +1,51 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginSkeleton />}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+/** Same outer shape as LoginForm so the page doesn't flash blank. */
+function LoginSkeleton() {
+  return (
+    <div className="flex min-h-[80vh] flex-col items-center justify-center px-6">
+      <div className="w-full max-w-sm">
+        <h1 className="text-2xl font-semibold">hermes</h1>
+        <p className="mt-1 text-sm text-zinc-500">Family document vault</p>
+        <div className="mt-8 space-y-4">
+          <div className="h-12 rounded-lg bg-zinc-200/60 dark:bg-zinc-800/60" />
+          <div className="h-12 rounded-lg bg-zinc-300/60 dark:bg-zinc-700/60" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Returns a safe same-origin redirect target. Anything that isn't a single
+ * "/" followed by a non-slash, non-backslash, non-whitespace character is
+ * dropped to the default landing page. This prevents `?next=https://evil.com`
+ * style open-redirect phishing AND whitespace bypasses like `/\t//evil.com`
+ * that the WHATWG URL parser would later collapse to `//evil.com`.
+ */
+function safeNext(raw: string | null): string {
+  if (!raw) return "/browse";
+  // Must be exactly: "/" + (a non-slash, non-backslash, non-whitespace, non-control char)
+  // …followed by any allowed path/query/hash characters.
+  if (!/^\/[^/\\\s\x00-\x1f]/.test(raw)) return "/browse";
+  return raw;
+}
+
+function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = params.get("next") || "/browse";
+  const next = safeNext(params.get("next"));
 
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +63,8 @@ export default function LoginPage() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data?.error ?? "Couldn't sign in");
+        // Use `||` not `??` so empty-string errors fall back to the generic message.
+        setError((data?.error as string) || "Couldn't sign in");
         return;
       }
       router.replace(next);

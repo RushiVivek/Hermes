@@ -35,11 +35,13 @@ function loadServiceAccount(): ServiceAccount {
   let parsed: { project_id: string; client_email: string; private_key: string };
   try {
     parsed = JSON.parse(raw);
-  } catch (e) {
+  } catch {
+    // Don't echo the parse error message — V8 quotes the offending input,
+    // which here is the service-account JSON (private key included).
     throw new Error(
-      `FIREBASE_SERVICE_ACCOUNT is not valid JSON: ${(e as Error).message}. ` +
-        `If your value spans multiple lines or contains '#'/spaces unquoted, ` +
-        `dotenv has truncated it. Single-quote the value or use base64.`,
+      "FIREBASE_SERVICE_ACCOUNT is not valid JSON. If your value spans " +
+        "multiple lines or contains '#'/spaces unquoted, dotenv has truncated " +
+        "it. Single-quote the value or use base64.",
     );
   }
   if (!parsed.project_id || !parsed.client_email || !parsed.private_key) {
@@ -60,8 +62,37 @@ function getApp() {
   return initializeApp({ credential: cert(loadServiceAccount()) });
 }
 
-export const db = getFirestore(getApp());
-export const docsCol = db.collection("docs");
+// settings() can be called only once per Firestore instance, and only before
+// any read/write. Apply it the first time getDb() runs; cache the instance so
+// subsequent callers reuse it.
+const SETTINGS_TAG = "__hermesFirestoreSettingsApplied";
+type Tagged = { [SETTINGS_TAG]?: boolean };
+
+let cachedDb: FirebaseFirestore.Firestore | null = null;
+
+/** Lazy Firestore accessor — called at request time, not at module import.
+ * This keeps `next build` from blowing up on env-less static analysis and
+ * prevents one Firestore-using route from poisoning unrelated routes. */
+export function getDb(): FirebaseFirestore.Firestore {
+  if (cachedDb) return cachedDb;
+  const d = getFirestore(getApp());
+  if (!(d as unknown as Tagged)[SETTINGS_TAG]) {
+    try {
+      // Drop undefined fields instead of throwing — optional doc fields like
+      // `owner` and `doc_date` arrive as undefined from form data.
+      d.settings({ ignoreUndefinedProperties: true });
+    } catch {
+      // Tolerate races where another import touched the instance first.
+    }
+    (d as unknown as Tagged)[SETTINGS_TAG] = true;
+  }
+  cachedDb = d;
+  return d;
+}
+
+export function docsCol(): FirebaseFirestore.CollectionReference {
+  return getDb().collection("docs");
+}
 
 export function fromFirestore(id: string, data: FirebaseFirestore.DocumentData): Doc {
   const uploadedAt =

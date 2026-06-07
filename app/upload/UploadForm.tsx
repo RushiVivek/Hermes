@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { formatBytes } from "@/lib/format";
 
 interface Props {
   categories: string[];
@@ -19,6 +20,11 @@ export default function UploadForm({ categories }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
+  // Mirror `busy` into a ref so the global drag/drop handlers and the input
+  // change handlers can synchronously skip mutations during an upload.
+  const busyRef = useRef(false);
+  useEffect(() => { busyRef.current = busy; }, [busy]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
@@ -26,17 +32,22 @@ export default function UploadForm({ categories }: Props) {
   useEffect(() => {
     let depth = 0;
     function onDragEnter(e: DragEvent) {
+      // Only count drag-enter for actual file drags so we don't desync depth
+      // against drag-leave (which we always increment in lockstep below).
       if (!e.dataTransfer?.types.includes("Files")) return;
+      // Don't invite drops while an upload is in flight — the drop would be
+      // silently dropped by addFiles().
+      if (busyRef.current) return;
       depth++;
       setDragOver(true);
       e.preventDefault();
     }
-    function onDragLeave() {
-      depth--;
-      if (depth <= 0) {
-        depth = 0;
-        setDragOver(false);
-      }
+    function onDragLeave(e: DragEvent) {
+      // Mirror onDragEnter's filter so depth can't go negative for non-file
+      // drags (text selections, links).
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragOver(false);
     }
     function onDragOver(e: DragEvent) {
       if (e.dataTransfer?.types.includes("Files")) {
@@ -63,14 +74,27 @@ export default function UploadForm({ categories }: Props) {
   }, []);
 
   function addFiles(incoming: File[]) {
+    if (busyRef.current) return; // don't mutate the list mid-upload
     setFiles((prev) => {
-      const seen = new Set(prev.map((f) => `${f.name}-${f.size}`));
-      const fresh = incoming.filter((f) => !seen.has(`${f.name}-${f.size}`));
+      // Dedup against in-flight files only by (name, size, lastModified) — the
+      // lastModified bit avoids dropping camera-burst photos that share the
+      // generated name and identical byte size.
+      const key = (f: File) => `${f.name}-${f.size}-${f.lastModified}`;
+      const seen = new Set(prev.map(key));
+      const fresh = incoming.filter((f) => !seen.has(key(f)));
       return [...prev, ...fresh];
     });
   }
 
+  function pickFromInput(input: HTMLInputElement | null) {
+    if (!input) return;
+    if (input.files) addFiles(Array.from(input.files));
+    // Reset so picking the same file again still fires the change event.
+    input.value = "";
+  }
+
   function removeFile(idx: number) {
+    if (busyRef.current) return; // don't mutate the list mid-upload
     setFiles((prev) => prev.filter((_, i) => i !== idx));
   }
 
@@ -93,20 +117,36 @@ export default function UploadForm({ categories }: Props) {
 
       const res = await fetch("/api/upload", { method: "POST", body: fd });
       const data: {
-        created?: { id: string; path: string }[];
-        errors?: { filename: string; error: string }[];
+        created?: { index: number; id: string; path: string }[];
+        errors?: { index: number; filename: string; error: string }[];
         error?: string;
       } = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         setError(data.error ?? `Upload failed (${res.status})`);
+        setBusy(false);
         return;
       }
 
       const created = data.created ?? [];
       const errs = data.errors ?? [];
       if (errs.length > 0 && created.length === 0) {
+        // Total failure — stay on the page with the errors visible.
         setError(errs.map((e) => `${e.filename}: ${e.error}`).join("\n"));
+        setBusy(false);
+        return;
+      }
+      if (errs.length > 0) {
+        // Partial failure — keep ONLY the files that failed (by index, so
+        // duplicate filenames don't accidentally re-stage successful files).
+        const failedIndices = new Set(errs.map((e) => e.index));
+        setFiles((prev) => prev.filter((_, i) => failedIndices.has(i)));
+        setError(
+          `Uploaded ${created.length} of ${created.length + errs.length}. ` +
+            `Failed:\n` +
+            errs.map((e) => `${e.filename}: ${e.error}`).join("\n"),
+        );
+        setBusy(false);
         return;
       }
 
@@ -114,9 +154,12 @@ export default function UploadForm({ categories }: Props) {
       const url = path
         ? `/browse?path=${encodeURIComponent(path)}`
         : "/browse";
+      // Stay busy through the navigation so a double-tap can't fire a second
+      // POST during the push -> new-route-mount window.
       router.push(url);
       router.refresh();
-    } finally {
+    } catch (e) {
+      setError((e as Error).message);
       setBusy(false);
     }
   }
@@ -164,7 +207,7 @@ export default function UploadForm({ categories }: Props) {
           capture="environment"
           multiple
           className="hidden"
-          onChange={(e) => addFiles(Array.from(e.target.files ?? []))}
+          onChange={(e) => pickFromInput(e.target)}
         />
         <input
           ref={fileInputRef}
@@ -172,7 +215,7 @@ export default function UploadForm({ categories }: Props) {
           accept="image/*,application/pdf"
           multiple
           className="hidden"
-          onChange={(e) => addFiles(Array.from(e.target.files ?? []))}
+          onChange={(e) => pickFromInput(e.target)}
         />
 
         {files.length > 0 && (
@@ -313,8 +356,3 @@ function XIcon() {
   );
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
