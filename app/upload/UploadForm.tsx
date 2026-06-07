@@ -265,10 +265,13 @@ export default function UploadForm({ categories }: Props) {
               type="text"
               value={subfolder}
               onChange={(e) => setSubfolder(e.target.value)}
-              placeholder="e.g. Aarav/Marksheets"
+              placeholder="e.g. Aarav/Marksheets/2024"
               className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-3 outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-200"
               style={{ minHeight: 48 }}
             />
+            <span className="mt-1 block text-xs text-zinc-500">
+              Use “/” to nest folders as deep as you like.
+            </span>
           </label>
 
           <label className="block">

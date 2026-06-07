@@ -38,7 +38,7 @@ export default async function DocDetailPage({
       <h1 className="mt-3 text-xl font-semibold">{doc.title}</h1>
 
       <a
-        href={withCacheBuster(doc.buzzheavier_url)}
+        href={`/api/docs/${doc.id}/download?disposition=inline`}
         target="_blank"
         rel="noreferrer"
         className="mt-4 block rounded-xl border border-zinc-200 bg-white p-6 text-center text-sm font-medium active:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:active:bg-zinc-800"
@@ -48,6 +48,14 @@ export default async function DocDetailPage({
         <span className="block text-xs font-normal text-zinc-500">
           {doc.mime} · {formatBytes(doc.size_bytes)}
         </span>
+      </a>
+
+      <a
+        href={`/api/docs/${doc.id}/download`}
+        className="mt-3 inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 active:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:active:bg-zinc-800"
+        style={{ minHeight: 36 }}
+      >
+        <DownloadIcon /> Download
       </a>
 
       <dl className="mt-6 space-y-3 text-sm">
@@ -76,15 +84,13 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Append a unique cache-buster query param so Cloudflare's per-URL cache
- * can't keep replaying a stale 403 / challenge HTML for the same blob. The
- * server resolves the path identically, so this is invisible to Buzzheavier
- * and only affects the CDN edge. */
-function withCacheBuster(url: string): string {
-  const sep = url.includes("?") ? "&" : "?";
-  // Server-rendered: a per-render nonce is enough; client doesn't need to
-  // mutate the URL after hydration since the user only clicks once.
-  const nonce = Math.random().toString(36).slice(2, 10);
-  return `${url}${sep}_=${nonce}`;
+function DownloadIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3v12" />
+      <path d="m6 11 6 6 6-6" />
+      <path d="M5 21h14" />
+    </svg>
+  );
 }
 

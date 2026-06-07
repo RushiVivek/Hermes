@@ -10,6 +10,7 @@ import ViewModeToggle, {
   type ViewMode,
 } from "@/components/ViewModeToggle";
 import { useTopBarSlot } from "@/components/TopBarSlot";
+import DeleteFolderButton from "./DeleteFolderButton";
 
 interface Props {
   crumbs: { name: string; path: string }[];
@@ -39,10 +40,22 @@ export default function BrowseView({ crumbs, subfolders, docs }: Props) {
   useTopBarSlot(slot);
 
   const empty = subfolders.length === 0 && docs.length === 0;
+  // Total descendant items at this folder = direct docs + sum of immediate
+  // subfolder counts (which are themselves transitive).
+  const totalItems =
+    docs.length + subfolders.reduce((n, f) => n + f.doc_count, 0);
+  // Only allow deleting actual folders, not the All view.
+  const currentPath = crumbs.length > 1 ? crumbs[crumbs.length - 1].path : "";
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-4">
       <Breadcrumb crumbs={crumbs} />
+
+      {currentPath && (
+        <div className="mt-3">
+          <DeleteFolderButton path={currentPath} itemCount={totalItems} />
+        </div>
+      )}
 
       {empty ? (
         <EmptyState />

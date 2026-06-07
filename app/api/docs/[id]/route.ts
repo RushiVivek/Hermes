@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { Timestamp } from "firebase-admin/firestore";
+import { revalidatePath } from "next/cache";
 import { docsCol, fromFirestore } from "@/lib/firestore";
 import { deleteFile } from "@/lib/buzzheavier";
+import { adjustAccountUsedBytes } from "@/lib/account-usage";
 
 export const runtime = "nodejs";
 
@@ -45,6 +47,22 @@ export async function DELETE(
   } catch (e) {
     blobDeleted = { error: (e as Error).message };
   }
+
+  // Decrement the account's used-bytes counter only when the blob delete
+  // actually succeeded — otherwise the counter would drift if the blob
+  // remains. Best-effort; backfill on next probe self-heals if it fails.
+  if ("ok" in blobDeleted && blobDeleted.ok) {
+    void adjustAccountUsedBytes(doc.buzzheavier_account_id, -doc.size_bytes).catch(
+      (err) => {
+        console.warn(
+          `[hermes] failed to adjust used_bytes after delete: ${(err as Error).message}`,
+        );
+      },
+    );
+  }
+
+  // Refresh the browse view so the deleted doc disappears immediately.
+  revalidatePath("/browse");
 
   return NextResponse.json({ ok: true, blobDeleted, path: doc.path });
 }

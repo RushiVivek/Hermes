@@ -7,7 +7,9 @@ import {
   deleteFile,
   isTransientPickError,
 } from "@/lib/buzzheavier";
+import { adjustAccountUsedBytes } from "@/lib/account-usage";
 import { CATEGORIES, type Category } from "@/lib/types";
+import { revalidatePath } from "next/cache";
 
 export const runtime = "nodejs";
 
@@ -158,6 +160,16 @@ export async function POST(req: Request) {
         status: "active",
       });
       created.push({ index, id: ref.id, title, path });
+      // Update the account's used-bytes counter. Best-effort — we don't fail
+      // the whole upload over a counter drift, and pickAccountForUpload's
+      // first-call backfill self-heals.
+      void adjustAccountUsedBytes(blob.buzzheavier_account_id, file.size).catch(
+        (err) => {
+          console.warn(
+            `[hermes] failed to adjust used_bytes for account: ${(err as Error).message}`,
+          );
+        },
+      );
     } catch (e) {
       // Clean up the orphaned blob so storage doesn't drift. Awaited because
       // on Vercel/Lambda the function context is frozen as soon as the
@@ -179,6 +191,11 @@ export async function POST(req: Request) {
       });
     }
   }
+
+  // Refresh the browse view so newly-uploaded docs appear without a manual
+  // reload. revalidatePath busts the dynamic page's cache for the next
+  // navigation.
+  if (created.length > 0) revalidatePath("/browse");
 
   return NextResponse.json({ created, errors });
 }

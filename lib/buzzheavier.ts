@@ -207,14 +207,13 @@ async function probeOnce(
   }
   if (res.ok) {
     const text = await res.text().catch(() => "");
-    let body: { data?: { id?: unknown; size?: unknown } } | null = null;
+    let body: { data?: { id?: unknown } } | null = null;
     try {
       body = JSON.parse(text);
     } catch {
       body = null;
     }
     const id = body?.data?.id;
-    const size = body?.data?.size;
     if (typeof id !== "string" || id === "") {
       console.warn(
         `[buzzheavier] /api/fs returned 200 but body wasn't { data: { id } }. ` +
@@ -225,9 +224,11 @@ async function probeOnce(
         reason: "Buzzheavier /api/fs returned an unexpected payload (likely a Cloudflare challenge).",
       };
     }
-    const usedBytes =
-      typeof size === "number" && Number.isFinite(size) && size >= 0 ? size : 0;
-    return { kind: "ok", rootDir: id, usedBytes };
+    // We don't trust `data.size` here — Buzzheavier reports 0 for the root
+    // directory's aggregate even when children have non-zero sizes. The real
+    // used-bytes lives in Firestore (lib/account-usage.ts) and is read by
+    // pickAccountForUpload separately.
+    return { kind: "ok", rootDir: id, usedBytes: 0 };
   }
   // Auth/not-found-ish: account is misconfigured or removed.
   if (res.status === 401 || res.status === 403 || res.status === 404) {
@@ -268,6 +269,10 @@ async function probeAccount(account: BuzzheavierAccount): Promise<ProbeResult> {
 export async function pickAccountForUpload(
   incomingBytes: number,
 ): Promise<PickedAccount> {
+  // Lazy import — keeps the test file from needing to mock account-usage when
+  // it only exercises the buzzheavier client surface.
+  const { getAccountUsedBytes } = await import("./account-usage");
+
   const { accounts, activeIndex } = loadAccounts();
   // Try active first, then later indices, then earlier (in case the operator
   // already rotated past a freshly-cleaned-up account).
@@ -289,8 +294,12 @@ export async function pickAccountForUpload(
       continue;
     }
     if (probe.kind === "skip") continue;
-    if (probe.usedBytes + incomingBytes <= ROTATE_AT) {
-      return { id: account.id, rootDir: probe.rootDir, usedBytes: probe.usedBytes };
+    // Probe established the account exists + we have its rootDir. Real used
+    // bytes come from Firestore — Buzzheavier's `data.size` for the root is
+    // unreliable (always 0 in observed responses).
+    const usedBytes = await getAccountUsedBytes(account.id);
+    if (usedBytes + incomingBytes <= ROTATE_AT) {
+      return { id: account.id, rootDir: probe.rootDir, usedBytes };
     }
   }
 

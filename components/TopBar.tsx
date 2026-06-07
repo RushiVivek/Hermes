@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import SignOutButton from "./SignOutButton";
 import ThemeToggle from "./ThemeToggle";
 import { useTopBarSlotContent } from "./TopBarSlot";
 
@@ -14,6 +15,7 @@ export default function TopBar() {
       <div className="mx-auto flex max-w-3xl items-center justify-end gap-2 px-4 py-2">
         {slot}
         <ThemeToggle />
+        <SignOutButton />
       </div>
     </div>
   );

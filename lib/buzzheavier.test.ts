@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// pickAccountForUpload reads per-account used-bytes from Firestore via
+// account-usage.ts. The tests below set the "used bytes" indirectly through
+// a controllable mock so they don't need a real Firebase connection.
+const usedBytesByAccount = new Map<string, number>();
+vi.mock("./account-usage", () => ({
+  getAccountUsedBytes: vi.fn(async (id: string) => usedBytesByAccount.get(id) ?? 0),
+  adjustAccountUsedBytes: vi.fn(async () => undefined),
+  reseedAccountUsedBytes: vi.fn(async () => 0),
+}));
+
 // Re-import the module per test so module-level env reads pick up
 // per-test process.env mutations.
 async function load() {
@@ -170,6 +180,14 @@ describe("pickAccountForUpload", () => {
   });
 
   function mockProbe(byId: Record<string, { status: number; size?: number; rootId?: string }>) {
+    // The `size` field here is now the per-account used-bytes that
+    // pickAccountForUpload reads from Firestore (mocked above). Seed the
+    // map up front so the lazy import inside pickAccountForUpload sees
+    // them.
+    usedBytesByAccount.clear();
+    for (const [id, cfg] of Object.entries(byId)) {
+      if (cfg.status === 200) usedBytesByAccount.set(id, cfg.size ?? 0);
+    }
     globalThis.fetch = vi.fn(async (_url, init) => {
       const auth = (init as RequestInit | undefined)?.headers as
         | Record<string, string>
@@ -178,8 +196,10 @@ describe("pickAccountForUpload", () => {
       const cfg = byId[bearer];
       if (!cfg) return new Response("nope", { status: 404 });
       if (cfg.status !== 200) return new Response("err", { status: cfg.status });
+      // Probe response no longer carries size — pickAccountForUpload reads
+      // the counter from Firestore.
       return new Response(
-        JSON.stringify({ data: { id: cfg.rootId ?? `root-${bearer}`, size: cfg.size ?? 0 } }),
+        JSON.stringify({ data: { id: cfg.rootId ?? `root-${bearer}` } }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }) as unknown as typeof fetch;
