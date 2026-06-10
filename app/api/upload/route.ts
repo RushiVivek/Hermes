@@ -8,6 +8,7 @@ import {
   isTransientPickError,
 } from "@/lib/buzzheavier";
 import { adjustAccountUsedBytes } from "@/lib/account-usage";
+import { registerFolderPath } from "@/lib/folder-store";
 import { CATEGORIES, type Category } from "@/lib/types";
 import { revalidatePath } from "next/cache";
 
@@ -192,10 +193,20 @@ export async function POST(req: Request) {
     }
   }
 
-  // Refresh the browse view so newly-uploaded docs appear without a manual
-  // reload. revalidatePath busts the dynamic page's cache for the next
-  // navigation.
-  if (created.length > 0) revalidatePath("/browse");
+  if (created.length > 0) {
+    // Persist the folder (and ancestors) so it survives even if all its docs
+    // are later deleted. Best-effort — browse still works off doc paths if
+    // this write fails.
+    try {
+      await registerFolderPath(path);
+    } catch (e) {
+      console.warn(`[hermes] failed to register folder "${path}": ${(e as Error).message}`);
+    }
+    // Refresh the browse view so newly-uploaded docs appear without a manual
+    // reload. revalidatePath busts the dynamic page's cache for the next
+    // navigation.
+    revalidatePath("/browse");
+  }
 
   return NextResponse.json({ created, errors });
 }

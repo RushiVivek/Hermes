@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { docsCol, fromFirestore } from "@/lib/firestore";
 import { deleteFile } from "@/lib/buzzheavier";
 import { adjustAccountUsedBytes } from "@/lib/account-usage";
+import { unregisterFolderTree } from "@/lib/folder-store";
 import { isUnderPath } from "@/lib/folders";
 
 export const runtime = "nodejs";
@@ -36,7 +37,17 @@ export async function DELETE(req: Request) {
     .map((d) => fromFirestore(d.id, d.data()))
     .filter((doc) => isUnderPath(doc.path, path));
 
+  // Remove the folder (and descendants) from the persistent registry first,
+  // so deleting an empty folder also makes it disappear. Done even when there
+  // are zero docs.
+  try {
+    await unregisterFolderTree(path);
+  } catch (e) {
+    console.warn(`[hermes] failed to unregister folder "${path}": ${(e as Error).message}`);
+  }
+
   if (targets.length === 0) {
+    revalidatePath("/browse");
     return NextResponse.json({ deleted: 0, blobErrors: [] });
   }
 

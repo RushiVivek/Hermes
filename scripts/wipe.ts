@@ -91,8 +91,19 @@ async function main() {
   }
 
   await writer.commit();
+
+  // Clear the persistent folder registry too, so emptied folders don't linger
+  // after a wipe.
+  const folderSnap = await db.collection("folders").get();
+  if (!folderSnap.empty) {
+    const fb = db.batch();
+    folderSnap.docs.forEach((d) => fb.delete(d.ref));
+    await fb.commit();
+  }
+
   console.log(
-    `\nDone. Rows soft-deleted: ${rowOk}. Blobs deleted: ${blobOk}. Blob errors: ${blobErr}.`,
+    `\nDone. Rows soft-deleted: ${rowOk}. Blobs deleted: ${blobOk}. ` +
+      `Blob errors: ${blobErr}. Folder entries cleared: ${folderSnap.size}.`,
   );
 }
 

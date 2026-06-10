@@ -28,14 +28,19 @@ export function isUnderPath(docPath: string, currentPath: string): boolean {
 }
 
 /**
- * Given the current folder `currentPath` and the full set of active docs,
- * return:
+ * Given the current folder `currentPath`, the full set of active docs, and an
+ * optional list of registered folder paths (which keep folders alive after
+ * their last doc is deleted), return:
  *   - subfolders: immediate children of currentPath (with descendant doc counts)
  *   - docs: docs whose `path` is exactly currentPath
+ *
+ * A subfolder appears if it contains docs OR if it's a registered folder path
+ * (so emptied folders still show, with a doc_count of 0).
  */
 export function listFolder(
   docs: Doc[],
   currentPath: string,
+  folderPaths: string[] = [],
 ): { subfolders: FolderEntry[]; docs: Doc[] } {
   const currentParts = splitPath(currentPath);
   const subfolderCounts = new Map<string, number>();
@@ -50,6 +55,17 @@ export function listFolder(
       const childName = parts[currentParts.length];
       subfolderCounts.set(childName, (subfolderCounts.get(childName) ?? 0) + 1);
     }
+  }
+
+  // Fold in registered folders that live directly under currentPath so an
+  // empty (or doc-less-but-has-subfolders) folder still renders. We don't
+  // bump the count for these — the count reflects documents only.
+  for (const fp of folderPaths) {
+    if (!isUnderPath(fp, currentPath)) continue;
+    const parts = splitPath(fp);
+    if (parts.length <= currentParts.length) continue; // self or ancestor
+    const childName = parts[currentParts.length];
+    if (!subfolderCounts.has(childName)) subfolderCounts.set(childName, 0);
   }
 
   const subfolders: FolderEntry[] = Array.from(subfolderCounts.entries())

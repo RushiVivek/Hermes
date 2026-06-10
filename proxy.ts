@@ -26,6 +26,8 @@ export const config = {
   matcher: [
     // /api/auth/logout is excluded so a stuck/stale session can clear its own
     // cookie via POST /api/auth/logout without first having to be valid.
-    "/((?!login(?:/|$)|api/auth/login(?:/|$)|api/auth/logout(?:/|$)|_next/static/|_next/image/|favicon\\.ico$|manifest\\.webmanifest$|sw\\.js$|robots\\.txt$|icons/).*)",
+    // /api/health is excluded so Render's (unauthenticated) health probe gets
+    // a 200 instead of a 401.
+    "/((?!login(?:/|$)|api/auth/login(?:/|$)|api/auth/logout(?:/|$)|api/health(?:/|$)|_next/static/|_next/image/|favicon\\.ico$|manifest\\.webmanifest$|sw\\.js$|robots\\.txt$|icons/).*)",
   ],
 };
