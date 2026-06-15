@@ -127,7 +127,8 @@ function resolveFields(item: ConfirmItem): Resolved | { error: string } {
     ? Array.from(
         new Set(
           item.tags
-            .map((t) => (typeof t === "string" ? t.trim() : ""))
+            // Lowercase to keep tags case-canonical across write paths.
+            .map((t) => (typeof t === "string" ? t.trim().toLowerCase() : ""))
             .filter(Boolean),
         ),
       ).slice(0, 10)

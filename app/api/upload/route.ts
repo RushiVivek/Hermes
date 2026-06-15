@@ -266,7 +266,10 @@ function parseManualMeta(form: FormData): ManualMeta | { error: string } {
   const tagsRaw = formString(form, "tags");
   const tags = tagsRaw
     ? Array.from(
-        new Set(tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)),
+        // Lowercase so tags are case-canonical across all write paths
+        // (auto-suggest already lowercases) — keeps tag filters / grouping
+        // from treating "CBSE" and "cbse" as different tags.
+        new Set(tagsRaw.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)),
       ).slice(0, 10)
     : [];
   return {

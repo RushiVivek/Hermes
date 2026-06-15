@@ -201,3 +201,141 @@ export async function extractDocMeta(
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Chat retrieval: turn a natural-language query into structured filters.
+
+export interface QueryFilters {
+  category?: Category;
+  owner?: string;
+  /** Path prefix, e.g. "Education/Aarav" — matches that folder and below. */
+  path_prefix?: string;
+  tag?: string;
+  /** Inclusive ISO date bounds on doc_date. */
+  date_from?: string;
+  date_to?: string;
+  /** Leftover words to substring-match against title/tags/owner/path. */
+  free_text?: string;
+}
+
+export interface ParsedQuery {
+  filters: QueryFilters;
+  /** One short sentence describing what we searched for — shown on 0 results. */
+  explain: string;
+}
+
+export interface QueryContext {
+  owners?: string[];
+  paths?: string[];
+}
+
+const QUERY_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    filters: {
+      type: Type.OBJECT,
+      properties: {
+        category: { type: Type.STRING, enum: [...CATEGORIES] },
+        owner: { type: Type.STRING },
+        path_prefix: { type: Type.STRING },
+        tag: { type: Type.STRING },
+        date_from: { type: Type.STRING, description: "ISO YYYY-MM-DD or empty." },
+        date_to: { type: Type.STRING, description: "ISO YYYY-MM-DD or empty." },
+        free_text: {
+          type: Type.STRING,
+          description:
+            "Remaining keywords not captured by the structured filters, for substring matching.",
+        },
+      },
+    },
+    explain: {
+      type: Type.STRING,
+      description: "One short sentence describing what you searched for.",
+    },
+  },
+  required: ["filters", "explain"],
+};
+
+function buildQueryPrompt(q: string, ctx: QueryContext): string {
+  const owners = (ctx.owners ?? []).filter(Boolean);
+  const paths = (ctx.paths ?? []).filter(Boolean);
+  return [
+    "You translate a family member's plain-language request into structured search filters over a document vault.",
+    `Allowed categories: ${CATEGORIES.join(", ")}.`,
+    owners.length ? `Known people: ${owners.join(", ")}.` : "",
+    paths.length ? `Existing folders: ${paths.slice(0, 40).join(", ")}.` : "",
+    `Request: "${q}"`,
+    "Fill only the filters you're confident about; leave the rest as empty strings.",
+    "Put any leftover descriptive words in free_text. Keep owner/category exactly matching the known values when they clearly apply.",
+    "Respond with the structured JSON only.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function sanitizeFilters(raw: unknown): QueryFilters {
+  const o = ((raw ?? {}) as { filters?: unknown }).filters as
+    | Record<string, unknown>
+    | undefined;
+  if (!o) return {};
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const out: QueryFilters = {};
+
+  const cat = str(o.category) as Category;
+  if (CATEGORIES.includes(cat)) out.category = cat;
+
+  const owner = str(o.owner);
+  if (owner) out.owner = owner;
+
+  const pathPrefix = str(o.path_prefix).replace(/^\/+|\/+$/g, "");
+  if (pathPrefix) out.path_prefix = pathPrefix;
+
+  const tag = str(o.tag).toLowerCase();
+  if (tag) out.tag = tag;
+
+  const from = str(o.date_from);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(from)) out.date_from = from;
+  const to = str(o.date_to);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(to)) out.date_to = to;
+
+  const free = str(o.free_text);
+  if (free) out.free_text = free;
+
+  return out;
+}
+
+/**
+ * Parse a natural-language query into filters. Returns null if Gemini isn't
+ * configured or the call fails — the caller then falls back to plain
+ * substring search over the whole query.
+ */
+export async function parseQuery(
+  q: string,
+  ctx: QueryContext = {},
+): Promise<ParsedQuery | null> {
+  if (!geminiConfigured()) return null;
+  try {
+    const ai = getClient();
+    const res = await ai.models.generateContent({
+      model: MODEL,
+      contents: [{ role: "user", parts: [{ text: buildQueryPrompt(q, ctx) }] }],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: QUERY_SCHEMA,
+      },
+    });
+    const text = res.text;
+    if (!text) return null;
+    const parsed = JSON.parse(text) as { explain?: unknown };
+    return {
+      filters: sanitizeFilters(parsed),
+      explain:
+        typeof parsed.explain === "string" && parsed.explain.trim()
+          ? parsed.explain.trim()
+          : `Searched for "${q}".`,
+    };
+  } catch (e) {
+    console.warn(`[gemini] parseQuery failed: ${(e as Error).message}`);
+    return null;
+  }
+}
