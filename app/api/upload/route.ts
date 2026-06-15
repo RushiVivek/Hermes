@@ -9,6 +9,7 @@ import {
 } from "@/lib/buzzheavier";
 import { adjustAccountUsedBytes } from "@/lib/account-usage";
 import { registerFolderPath } from "@/lib/folder-store";
+import { extractDocMeta, geminiConfigured, type DocSuggestion } from "@/lib/gemini";
 import { CATEGORIES, type Category } from "@/lib/types";
 import { revalidatePath } from "next/cache";
 
@@ -19,6 +20,11 @@ interface UploadResultItem {
   id: string;
   title: string;
   path: string;
+  /** Present in auto-organize mode: Gemini's proposed fields for the confirm
+   * screen. The doc is saved as pending_confirm until the user confirms. */
+  suggestion?: DocSuggestion;
+  /** Whether the doc still needs confirmation. */
+  pending?: boolean;
 }
 
 interface UploadErrorItem {
@@ -26,6 +32,9 @@ interface UploadErrorItem {
   filename: string;
   error: string;
 }
+
+const MAX_FILES = 25;
+const MAX_BYTES = 250 * 1024 * 1024;
 
 export async function POST(req: Request) {
   let form: FormData;
@@ -35,64 +44,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Expected multipart form" }, { status: 400 });
   }
 
-  const category = formString(form, "category");
-  if (!CATEGORIES.includes(category as Category)) {
-    return NextResponse.json(
-      { error: `Invalid category. Must be one of: ${CATEGORIES.join(", ")}` },
-      { status: 400 },
-    );
-  }
-  const subfolder = sanitizeSubfolder(formString(form, "subfolder"));
-  if (subfolder === null) {
-    return NextResponse.json(
-      { error: "Sub-folder contains invalid characters or '..'." },
-      { status: 400 },
-    );
-  }
-  // Cap path length so a hostile or fat-fingered subfolder doesn't pollute
-  // every Firestore index entry. 200 chars is well under Firestore's
-  // ~1500-byte indexed-field limit.
-  if (subfolder.length > 200) {
-    return NextResponse.json(
-      { error: "Sub-folder is too long." },
-      { status: 400 },
-    );
-  }
-  const owner = formString(form, "owner") || undefined;
-  const docDateRaw = formString(form, "doc_date");
-  // Only accept real ISO calendar dates — the regex alone would let
-  // "2026-13-45" through and break any future caller that does
-  // new Date(doc.doc_date) with RangeError: Invalid time value.
-  if (docDateRaw && !isValidIsoDate(docDateRaw)) {
-    return NextResponse.json(
-      { error: "Date on document must be a real YYYY-MM-DD date." },
-      { status: 400 },
-    );
-  }
-  const docDate = docDateRaw || undefined;
-  const tagsRaw = formString(form, "tags");
-  const tags = tagsRaw
-    ? Array.from(
-        new Set(
-          tagsRaw
-            .split(",")
-            .map((t) => t.trim())
-            .filter(Boolean),
-        ),
-      ).slice(0, 10)
-    : [];
-
-  const path = subfolder ? `${category}/${subfolder}` : category;
+  const autoOrganize =
+    formString(form, "autoOrganize") === "1" && geminiConfigured();
 
   const files = form.getAll("files").filter((v): v is File => v instanceof File);
   if (files.length === 0) {
     return NextResponse.json({ error: "No files provided" }, { status: 400 });
   }
-  // Family-scale upload caps. These are sanity guards, not a security boundary.
-  // 25 files / 250 MB combined keeps a single request under typical serverless
-  // function memory + timeout limits, so we don't end up partially persisted.
-  const MAX_FILES = 25;
-  const MAX_BYTES = 250 * 1024 * 1024;
   if (files.length > MAX_FILES) {
     return NextResponse.json(
       { error: `Too many files in one upload (max ${MAX_FILES}).` },
@@ -110,60 +68,135 @@ export async function POST(req: Request) {
     );
   }
 
-  // Pick a Buzzheavier account once for the whole batch — preflight checks
-  // each account's used bytes via /api/fs and rotates forward if the active
-  // account would exceed 90% of the per-account quota.
+  // --- Manual mode reads shared metadata from the form up front. Auto mode
+  // derives per-file metadata from Gemini and saves rows as pending_confirm. ---
+  let manual: ManualMeta | null = null;
+  if (!autoOrganize) {
+    const parsed = parseManualMeta(form);
+    if ("error" in parsed) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
+    manual = parsed;
+  }
+
+  // Pick a Buzzheavier account once for the whole batch.
   let account: Awaited<ReturnType<typeof pickAccountForUpload>>;
   try {
     account = await pickAccountForUpload(totalBytes);
   } catch (e) {
-    // 502 Bad Gateway when Buzzheavier itself flaked; 507 Insufficient
-    // Storage when accounts are genuinely full.
     const status = isTransientPickError(e) ? 502 : 507;
     return NextResponse.json({ error: (e as Error).message }, { status });
   }
 
+  // For auto mode we may need known owners/paths to nudge Gemini toward reuse.
+  let knownOwners: string[] = [];
+  let knownPaths: string[] = [];
+  if (autoOrganize) {
+    try {
+      const snap = await docsCol().where("status", "==", "active").get();
+      const owners = new Set<string>();
+      const paths = new Set<string>();
+      snap.forEach((d) => {
+        const data = d.data();
+        if (typeof data.owner === "string" && data.owner) owners.add(data.owner);
+        if (typeof data.path === "string" && data.path) paths.add(data.path);
+      });
+      knownOwners = [...owners];
+      knownPaths = [...paths];
+    } catch {
+      // Non-fatal — Gemini just won't get the reuse hints.
+    }
+  }
+
   const created: UploadResultItem[] = [];
   const errors: UploadErrorItem[] = [];
+  const finalizedPaths = new Set<string>();
 
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     const filename = file.name || "untitled";
-    let blob: { buzzheavier_id: string; buzzheavier_url: string; buzzheavier_account_id: string };
+    const mime = file.type || "application/octet-stream";
+
+    let bytes: Uint8Array;
     try {
-      const buf = new Uint8Array(await file.arrayBuffer());
-      blob = await uploadFile(account, {
-        bytes: buf,
-        filename,
-        mime: file.type || "application/octet-stream",
-      });
+      bytes = new Uint8Array(await file.arrayBuffer());
     } catch (e) {
       errors.push({ index, filename, error: (e as Error).message });
       continue;
     }
 
+    // Run Gemini (auto mode) before the upload so a Gemini failure doesn't
+    // leave an orphan blob — it just falls back to a blank confirm.
+    let suggestion: DocSuggestion | null = null;
+    if (autoOrganize) {
+      suggestion = await extractDocMeta({
+        bytes,
+        mime,
+        filename,
+        hint: formString(form, "hint") || undefined,
+        knownOwners,
+        knownPaths,
+      });
+    }
+
+    let blob: { buzzheavier_id: string; buzzheavier_url: string; buzzheavier_account_id: string };
+    try {
+      blob = await uploadFile(account, { bytes, filename, mime });
+    } catch (e) {
+      errors.push({ index, filename, error: (e as Error).message });
+      continue;
+    }
+
+    // Resolve the fields + status for this doc.
+    const fields = autoOrganize
+      ? autoFields(suggestion, filename)
+      : manualFields(manual!, filename);
+    const status = autoOrganize ? "pending_confirm" : "active";
+
     try {
       const ref = docsCol().doc();
-      const title = stripExtension(filename);
       await ref.set({
-        path,
-        title,
-        category,
-        owner,
-        doc_date: docDate,
-        tags,
+        path: fields.path,
+        title: fields.title,
+        category: fields.category,
+        owner: fields.owner,
+        doc_date: fields.doc_date,
+        tags: fields.tags,
         buzzheavier_id: blob.buzzheavier_id,
         buzzheavier_url: blob.buzzheavier_url,
         buzzheavier_account_id: blob.buzzheavier_account_id,
-        mime: file.type || "application/octet-stream",
+        mime,
         size_bytes: file.size,
         uploaded_at: Timestamp.now(),
-        status: "active",
+        status,
       });
-      created.push({ index, id: ref.id, title, path });
-      // Update the account's used-bytes counter. Best-effort — we don't fail
-      // the whole upload over a counter drift, and pickAccountForUpload's
-      // first-call backfill self-heals.
+      created.push({
+        index,
+        id: ref.id,
+        title: fields.title,
+        path: fields.path,
+        suggestion: autoOrganize
+          ? {
+              title: fields.title,
+              category: fields.category,
+              subfolder: fields.subfolder,
+              owner: fields.owner ?? "",
+              doc_date: fields.doc_date ?? "",
+              tags: fields.tags,
+            }
+          : undefined,
+        pending: autoOrganize,
+      });
+      if (!autoOrganize) finalizedPaths.add(fields.path);
+      // Count bytes now — the blob is on Buzzheavier regardless of whether this
+      // is an active or pending_confirm doc. Confirm doesn't re-count; discard
+      // and delete decrement. KNOWN LEAK: if an auto-organize draft is never
+      // confirmed or discarded (user closes the tab), the bytes stay counted
+      // and the blob lingers. It's bounded by how often that happens, and
+      // getAccountUsedBytes()'s backfill (which walks the real tree, pending
+      // blobs included) keeps the counter consistent with reality rather than
+      // drifting. A periodic sweep of stale pending_confirm rows is the proper
+      // fix if it ever matters at family scale.
       void adjustAccountUsedBytes(blob.buzzheavier_account_id, file.size).catch(
         (err) => {
           console.warn(
@@ -172,18 +205,13 @@ export async function POST(req: Request) {
         },
       );
     } catch (e) {
-      // Clean up the orphaned blob so storage doesn't drift. Awaited because
-      // on Vercel/Lambda the function context is frozen as soon as the
-      // response returns — a fire-and-forget DELETE would never reach
-      // Buzzheavier.
       try {
         await deleteFile({
           buzzheavier_id: blob.buzzheavier_id,
           buzzheavier_account_id: blob.buzzheavier_account_id,
         });
       } catch {
-        // Swallow — we're already in the failure path; the leaked blob is
-        // recoverable manually but we won't fail the whole request over it.
+        // Already in the failure path; orphan blob is recoverable manually.
       }
       errors.push({
         index,
@@ -193,22 +221,109 @@ export async function POST(req: Request) {
     }
   }
 
-  if (created.length > 0) {
-    // Persist the folder (and ancestors) so it survives even if all its docs
-    // are later deleted. Best-effort — browse still works off doc paths if
-    // this write fails.
-    try {
-      await registerFolderPath(path);
-    } catch (e) {
-      console.warn(`[hermes] failed to register folder "${path}": ${(e as Error).message}`);
+  // Manual mode finalizes immediately: register folders + refresh browse.
+  // Auto mode defers both to the confirm step (pending docs aren't shown).
+  if (!autoOrganize && finalizedPaths.size > 0) {
+    for (const p of finalizedPaths) {
+      try {
+        await registerFolderPath(p);
+      } catch (e) {
+        console.warn(`[hermes] failed to register folder "${p}": ${(e as Error).message}`);
+      }
     }
-    // Refresh the browse view so newly-uploaded docs appear without a manual
-    // reload. revalidatePath busts the dynamic page's cache for the next
-    // navigation.
     revalidatePath("/browse");
   }
 
-  return NextResponse.json({ created, errors });
+  return NextResponse.json({ created, errors, autoOrganize });
+}
+
+// ---------------------------------------------------------------------------
+
+interface ManualMeta {
+  category: Category;
+  subfolder: string;
+  owner?: string;
+  docDate?: string;
+  tags: string[];
+}
+
+function parseManualMeta(form: FormData): ManualMeta | { error: string } {
+  const category = formString(form, "category");
+  if (!CATEGORIES.includes(category as Category)) {
+    return { error: `Invalid category. Must be one of: ${CATEGORIES.join(", ")}` };
+  }
+  const subfolder = sanitizeSubfolder(formString(form, "subfolder"));
+  if (subfolder === null) {
+    return { error: "Sub-folder contains invalid characters or '..'." };
+  }
+  if (subfolder.length > 200) {
+    return { error: "Sub-folder is too long." };
+  }
+  const docDateRaw = formString(form, "doc_date");
+  if (docDateRaw && !isValidIsoDate(docDateRaw)) {
+    return { error: "Date on document must be a real YYYY-MM-DD date." };
+  }
+  const tagsRaw = formString(form, "tags");
+  const tags = tagsRaw
+    ? Array.from(
+        new Set(tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)),
+      ).slice(0, 10)
+    : [];
+  return {
+    category: category as Category,
+    subfolder,
+    owner: formString(form, "owner") || undefined,
+    docDate: docDateRaw || undefined,
+    tags,
+  };
+}
+
+interface ResolvedFields {
+  path: string;
+  title: string;
+  category: Category;
+  subfolder: string;
+  owner?: string;
+  doc_date?: string;
+  tags: string[];
+}
+
+function manualFields(m: ManualMeta, filename: string): ResolvedFields {
+  return {
+    path: m.subfolder ? `${m.category}/${m.subfolder}` : m.category,
+    title: stripExtension(filename),
+    category: m.category,
+    subfolder: m.subfolder,
+    owner: m.owner,
+    doc_date: m.docDate,
+    tags: m.tags,
+  };
+}
+
+function autoFields(s: DocSuggestion | null, filename: string): ResolvedFields {
+  // Gemini failed/unavailable → blank confirm with a sane default category.
+  if (!s) {
+    return {
+      path: "Other",
+      title: stripExtension(filename),
+      category: "Other",
+      subfolder: "",
+      owner: undefined,
+      doc_date: undefined,
+      tags: [],
+    };
+  }
+  const cleanSub = sanitizeSubfolder(s.subfolder) ?? "";
+  const path = cleanSub ? `${s.category}/${cleanSub}` : s.category;
+  return {
+    path,
+    title: s.title,
+    category: s.category,
+    subfolder: cleanSub,
+    owner: s.owner || undefined,
+    doc_date: s.doc_date || undefined,
+    tags: s.tags,
+  };
 }
 
 /** Read a string-typed FormData field. File parts are coerced to "" so a
@@ -239,15 +354,9 @@ function stripExtension(name: string): string {
   return name.slice(0, i);
 }
 
-/**
- * Returns the cleaned subfolder string, or null if the input contains
- * traversal segments / backslashes / control chars. We split on `/`, drop
- * empties, and reject any segment that's `.` or `..`.
- */
+/** Returns cleaned subfolder, or null on traversal/control-char input. */
 function sanitizeSubfolder(raw: string): string | null {
   if (raw === "") return "";
-  // Reject control chars (incl. DEL 0x7f), Unicode line/paragraph separators,
-  // and backslashes (which some platforms treat as path separators).
   if (/[\x00-\x1f\x7f\u2028\u2029\\]/.test(raw)) return null;
   const parts = raw.split("/").map((p) => p.trim()).filter(Boolean);
   if (parts.some((p) => p === "." || p === "..")) return null;

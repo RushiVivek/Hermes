@@ -35,14 +35,18 @@ async function confirm(prompt: string): Promise<boolean> {
 }
 
 async function main() {
-  const snap = await docsCol().where("status", "==", "active").get();
+  // Wipe both live docs and abandoned auto-organize drafts (pending_confirm
+  // rows the user never confirmed and whose blobs are still on Buzzheavier).
+  const snap = await docsCol()
+    .where("status", "in", ["active", "pending_confirm"])
+    .get();
   const docs = snap.docs.map((d) => fromFirestore(d.id, d.data()));
   if (docs.length === 0) {
-    console.log("No active docs. Nothing to wipe.");
+    console.log("No active or pending docs. Nothing to wipe.");
     return;
   }
 
-  console.log(`About to wipe ${docs.length} active doc(s):`);
+  console.log(`About to wipe ${docs.length} doc(s) (active + pending):`);
   for (const d of docs.slice(0, 20)) {
     console.log(`  • ${d.path} / ${d.title}`);
   }

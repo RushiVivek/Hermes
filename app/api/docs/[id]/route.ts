@@ -28,6 +28,14 @@ export async function DELETE(
   if (doc.status === "deleted") {
     return NextResponse.json({ ok: true, alreadyDeleted: true });
   }
+  // pending_confirm drafts belong to the upload-confirm flow; they're discarded
+  // via /api/docs/discard, not this route (which is for live, browsable docs).
+  if (doc.status !== "active") {
+    return NextResponse.json(
+      { error: "This document isn't active; use the upload flow to discard it." },
+      { status: 409 },
+    );
+  }
 
   // Soft-delete first; the row is the source of truth and we don't want a
   // failed Buzzheavier delete to leave the doc visible.
