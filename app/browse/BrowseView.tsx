@@ -47,13 +47,28 @@ export default function BrowseView({ crumbs, subfolders, docs }: Props) {
   // Only allow deleting actual folders, not the All view.
   const currentPath = crumbs.length > 1 ? crumbs[crumbs.length - 1].path : "";
 
+  const exportHref = currentPath
+    ? `/api/export?path=${encodeURIComponent(currentPath)}`
+    : "/api/export";
+
   return (
     <div className="mx-auto max-w-3xl px-4 py-4">
       <Breadcrumb crumbs={crumbs} />
 
-      {currentPath && (
-        <div className="mt-3">
-          <DeleteFolderButton path={currentPath} itemCount={totalItems} />
+      {!empty && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {currentPath && (
+            <DeleteFolderButton path={currentPath} itemCount={totalItems} />
+          )}
+          {/* Download navigation — the route streams a .zip attachment. */}
+          <a
+            href={exportHref}
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium active:bg-zinc-100 dark:border-zinc-700 dark:active:bg-zinc-800"
+            style={{ minHeight: 36 }}
+          >
+            <ZipIcon />
+            {currentPath ? "Download folder" : "Download everything"}
+          </a>
         </div>
       )}
 
@@ -301,6 +316,16 @@ function ChevronRight() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="text-zinc-400">
       <path d="m9 6 6 6-6 6" />
+    </svg>
+  );
+}
+
+function ZipIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M5 21h14" />
     </svg>
   );
 }

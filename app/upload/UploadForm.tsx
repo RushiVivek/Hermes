@@ -41,6 +41,9 @@ export default function UploadForm({ categories, aiAvailable }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // A short, dismissable note about what got skipped on the last add (wrong
+  // type, etc.) — distinct from the hard `error` (which blocks the form).
+  const [notice, setNotice] = useState<string | null>(null);
 
   // When an auto-organize upload returns, we switch to the confirm phase.
   const [pending, setPending] = useState<PendingDoc[] | null>(null);
@@ -71,12 +74,22 @@ export default function UploadForm({ categories, aiAvailable }: Props) {
     function onDragOver(e: DragEvent) {
       if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
     }
-    function onDrop(e: DragEvent) {
+    async function onDrop(e: DragEvent) {
       depth = 0;
       setDragOver(false);
-      if (!e.dataTransfer?.files?.length) return;
+      if (!e.dataTransfer) return;
       e.preventDefault();
-      addFiles(Array.from(e.dataTransfer.files));
+      if (busyRef.current) return;
+      // Prefer the entry API so dropped *folders* are walked recursively;
+      // fall back to the flat file list when entries aren't exposed.
+      const items = e.dataTransfer.items;
+      let collected: File[];
+      if (items && items.length && typeof items[0].webkitGetAsEntry === "function") {
+        collected = await filesFromDataTransferItems(items);
+      } else {
+        collected = Array.from(e.dataTransfer.files);
+      }
+      addFiles(collected);
     }
     window.addEventListener("dragenter", onDragEnter);
     window.addEventListener("dragleave", onDragLeave);
@@ -90,12 +103,62 @@ export default function UploadForm({ categories, aiAvailable }: Props) {
     };
   }, [pending]);
 
+  // Paste-to-upload: a copied screenshot / image lands straight in the list.
+  useEffect(() => {
+    if (pending) return;
+    function onPaste(e: ClipboardEvent) {
+      if (busyRef.current) return;
+      // Don't hijack a paste aimed at a text field (sub-folder / owner / tags).
+      const el = document.activeElement;
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        (el instanceof HTMLElement && el.isContentEditable)
+      ) {
+        return;
+      }
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const imgs: File[] = [];
+      for (const it of items) {
+        if (it.kind === "file" && it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) {
+            // Pasted images often have no name — give them one.
+            const ext = f.type.split("/")[1] || "png";
+            imgs.push(
+              f.name
+                ? f
+                : new File([f], `pasted-${Date.now()}.${ext}`, { type: f.type }),
+            );
+          }
+        }
+      }
+      if (imgs.length) {
+        e.preventDefault();
+        addFiles(imgs);
+      }
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [pending]);
+
   function addFiles(incoming: File[]) {
     if (busyRef.current) return;
+    // Only images + PDFs are storable; the picker's `accept` doesn't gate
+    // drops/pastes, so filter here and tell the user what we skipped.
+    const accepted = incoming.filter(isAcceptedFile);
+    const rejected = incoming.length - accepted.length;
+    setNotice(
+      rejected > 0
+        ? `Skipped ${rejected} file${rejected === 1 ? "" : "s"} — only images and PDFs can be added.`
+        : null,
+    );
+    if (accepted.length === 0) return;
     setFiles((prev) => {
       const key = (f: File) => `${f.name}-${f.size}-${f.lastModified}`;
       const seen = new Set(prev.map(key));
-      const fresh = incoming.filter((f) => !seen.has(key(f)));
+      const fresh = accepted.filter((f) => !seen.has(key(f)));
       return [...prev, ...fresh];
     });
   }
@@ -231,15 +294,23 @@ export default function UploadForm({ categories, aiAvailable }: Props) {
     <div className="mx-auto max-w-3xl px-4 py-6">
       <h1 className="text-xl font-semibold">Add documents</h1>
       <p className="mt-1 text-sm text-zinc-500">
-        Take a photo or pick files. You can add many at once.
+        Take a photo, pick files, drag a file or folder in, or paste an image.
       </p>
 
       {dragOver && (
-        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40">
-          <div className="rounded-2xl border-4 border-dashed border-white/80 bg-white/10 p-10 text-center text-lg font-medium text-white">
-            Drop files to add
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/50 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-2xl border-4 border-dashed border-white/80 bg-white/10 px-12 py-10 text-center text-white">
+            <DropIcon />
+            <span className="text-lg font-medium">Drop to add</span>
+            <span className="text-sm text-white/80">Images, PDFs, or a whole folder</span>
           </div>
         </div>
+      )}
+
+      {notice && (
+        <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+          {notice}
+        </p>
       )}
 
       <form onSubmit={onSubmit} className="mt-6 space-y-5">
@@ -668,4 +739,70 @@ function XIcon() {
       <path d="m6 6 12 12M18 6 6 18" />
     </svg>
   );
+}
+
+function DropIcon() {
+  return (
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 13V3" />
+      <path d="m8 7 4-4 4 4" />
+      <path d="M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6" />
+    </svg>
+  );
+}
+
+// --- drop helpers -----------------------------------------------------------
+
+const ACCEPT_EXT = /\.(jpe?g|png|webp|heic|heif|gif|pdf)$/i;
+function isAcceptedFile(f: File): boolean {
+  const t = (f.type || "").toLowerCase();
+  if (t === "application/pdf" || t.startsWith("image/")) return true;
+  // Some browsers leave type empty for certain drops; fall back to extension.
+  if (t === "") return ACCEPT_EXT.test(f.name);
+  return false;
+}
+
+interface FileSystemEntryLike {
+  isFile: boolean;
+  isDirectory: boolean;
+  file?: (cb: (f: File) => void, err: (e: unknown) => void) => void;
+  createReader?: () => {
+    readEntries: (cb: (entries: FileSystemEntryLike[]) => void, err: (e: unknown) => void) => void;
+  };
+}
+
+/** Recursively collect File objects from a DataTransferItemList, walking into
+ * dropped directories via the (webkit) entry API. */
+async function filesFromDataTransferItems(
+  items: DataTransferItemList,
+): Promise<File[]> {
+  const roots: FileSystemEntryLike[] = [];
+  // Snapshot entries synchronously — the list is invalidated after the event.
+  for (const it of items) {
+    const entry = (it as DataTransferItem & {
+      webkitGetAsEntry?: () => FileSystemEntryLike | null;
+    }).webkitGetAsEntry?.();
+    if (entry) roots.push(entry);
+  }
+  const out: File[] = [];
+  async function walk(entry: FileSystemEntryLike): Promise<void> {
+    if (entry.isFile && entry.file) {
+      const f = await new Promise<File | null>((resolve) =>
+        entry.file!((file) => resolve(file), () => resolve(null)),
+      );
+      if (f) out.push(f);
+    } else if (entry.isDirectory && entry.createReader) {
+      const reader = entry.createReader();
+      // readEntries returns at most 100 per call — loop until empty.
+      for (;;) {
+        const batch = await new Promise<FileSystemEntryLike[]>((resolve) =>
+          reader.readEntries((e) => resolve(e), () => resolve([])),
+        );
+        if (batch.length === 0) break;
+        for (const child of batch) await walk(child);
+      }
+    }
+  }
+  for (const r of roots) await walk(r);
+  return out;
 }
