@@ -35,3 +35,7 @@ services:
         sync: false
       - key: BUZZHEAVIER_ACTIVE_INDEX
         sync: false
+      # Optional: enables AI auto-organize on upload + smarter chat search.
+      # Without it the app still works (manual filing + substring search).
+      - key: GEMINI_API_KEY
+        sync: false
