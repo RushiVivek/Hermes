@@ -53,14 +53,29 @@ no way to raise it (confirmed in Vercel's docs). Render runs hermes as a
 persistent Node server, so the only upload limit is our
 `next.config.ts` `proxyClientMaxBodySize` (300 MB).
 
+0. **Smoke-test creds locally first** (catch problems before deploying):
+   ```sh
+   git pull && npm install
+   npm run buzzheavier:smoke   # confirms the Buzzheavier API round-trips
+   npm run dev                 # log in at :28085, upload one real file
+   ```
+   If it works locally it'll work on Render. If not, fix it here — don't debug
+   on Render. `buzzheavier:smoke` is also your first-line "is it me or is it
+   Buzzheavier/Cloudflare?" tool whenever storage misbehaves.
+
 1. **First deploy (Blueprint)**
    - The repo has a `render.yaml`. In Render: **New + → Blueprint**, pick this
      repo. It provisions a free web service: `npm ci && npm run build` →
      `npm run start` (binds Render's `$PORT`), health check `/api/health`.
-   - In the service's **Environment** tab, set the secret env vars (they're
-     marked `sync:false` in `render.yaml` so they're never committed):
-     `HERMES_PASSWORD`, `SESSION_SECRET`, `FIREBASE_SERVICE_ACCOUNT` (base64
-     form), `BUZZHEAVIER_ACCOUNTS`, `BUZZHEAVIER_ACTIVE_INDEX`.
+   - When you **Apply**, Render prompts for the secret env vars (marked
+     `sync:false` in `render.yaml` so they're never committed). Set all of:
+     - `HERMES_PASSWORD` — the shared vault password
+     - `SESSION_SECRET` — `openssl rand -base64 48`
+     - `FIREBASE_SERVICE_ACCOUNT` — **base64 form** (same value as `.env.local`)
+     - `BUZZHEAVIER_ACCOUNTS` — e.g. `["your-account-id"]`
+     - `BUZZHEAVIER_ACTIVE_INDEX` — `0`
+     - `GEMINI_API_KEY` — optional; enables AI auto-organize + smarter chat
+       (without it the app still works: manual filing + substring search)
 
 2. **Custom domain `hermes.rushivivek.com`**
    - Render service → **Settings → Custom Domains → Add** → `hermes.rushivivek.com`.
