@@ -25,15 +25,19 @@ services:
       - key: NODE_ENV
         value: production
       # Secrets — set these in the Render dashboard, not in this file.
-      - key: HERMES_PASSWORD
+      - key: HERMES_PASSWORD_HASH   # from `npm run hash-password`
         sync: false
       - key: SESSION_SECRET
         sync: false
       - key: FIREBASE_SERVICE_ACCOUNT
         sync: false
-      - key: BUZZHEAVIER_ACCOUNTS
+      - key: R2_ACCOUNT_ID
         sync: false
-      - key: BUZZHEAVIER_ACTIVE_INDEX
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
         sync: false
       # Optional: enables AI auto-organize on upload + smarter chat search.
       # Without it the app still works (manual filing + substring search).

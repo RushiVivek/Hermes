@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatBytes } from "@/lib/format";
+import { MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES } from "@/lib/types";
 
 interface Props {
   categories: string[];
@@ -179,6 +180,20 @@ export default function UploadForm({ categories, aiAvailable }: Props) {
     setError(null);
     if (files.length === 0) {
       setError("Pick at least one file.");
+      return;
+    }
+    // Same limits the server enforces — checked here so an oversized batch
+    // fails instantly instead of after the whole upload.
+    if (files.length > MAX_UPLOAD_FILES) {
+      setError(`That's ${files.length} files — upload at most ${MAX_UPLOAD_FILES} at a time.`);
+      return;
+    }
+    const totalBytes = files.reduce((n, f) => n + f.size, 0);
+    if (totalBytes > MAX_UPLOAD_BYTES) {
+      setError(
+        `These files add up to ${formatBytes(totalBytes)} — upload at most ` +
+          `${formatBytes(MAX_UPLOAD_BYTES)} at a time. Remove some and try again.`,
+      );
       return;
     }
     setBusy(true);
@@ -414,7 +429,7 @@ export default function UploadForm({ categories, aiAvailable }: Props) {
                 type="text"
                 value={subfolder}
                 onChange={(e) => setSubfolder(e.target.value)}
-                placeholder="e.g. Aarav/Marksheets/2024"
+                placeholder="e.g. Marksheets/2024"
                 className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-3 outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-200"
                 style={{ minHeight: 48 }}
               />
@@ -429,7 +444,7 @@ export default function UploadForm({ categories, aiAvailable }: Props) {
                 type="text"
                 value={owner}
                 onChange={(e) => setOwner(e.target.value)}
-                placeholder="e.g. Mom"
+                placeholder="e.g. Mother"
                 className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-3 outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-200"
                 style={{ minHeight: 48 }}
               />

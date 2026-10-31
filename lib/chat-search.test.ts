@@ -11,9 +11,7 @@ function doc(p: Partial<Doc>): Doc {
     owner: p.owner,
     doc_date: p.doc_date,
     tags: p.tags ?? [],
-    buzzheavier_id: "b",
-    buzzheavier_url: "u",
-    buzzheavier_account_id: "acc",
+    storage_key: "docs/x",
     mime: "application/pdf",
     size_bytes: 1,
     uploaded_at: "2026-01-01T00:00:00.000Z",
@@ -23,7 +21,7 @@ function doc(p: Partial<Doc>): Doc {
 
 describe("tokenize", () => {
   it("splits possessive 's into a separate dropped token", () => {
-    expect(tokenize("Aarav's passport")).toEqual(["aarav", "passport"]);
+    expect(tokenize("Sister's passport")).toEqual(["sister", "passport"]);
   });
   it("drops 1-char tokens and punctuation", () => {
     expect(tokenize("a, the - 10th!")).toEqual(["the", "10th"]);
@@ -39,16 +37,16 @@ describe("tokenize", () => {
 
 describe("matchesText", () => {
   const d = doc({
-    title: "Aarav 10th Board Marksheet",
-    owner: "Aarav",
-    path: "Education/Aarav/Marksheets",
+    title: "Sister 10th Board Marksheet",
+    owner: "Sister",
+    path: "Education/Sister/Marksheets",
     tags: ["marksheet", "cbse"],
   });
   it("matches a possessive query against the owner", () => {
-    expect(matchesText(d, "Aarav's marksheet")).toBe(true);
+    expect(matchesText(d, "Sister's marksheet")).toBe(true);
   });
   it("requires all words (AND)", () => {
-    expect(matchesText(d, "Aarav passport")).toBe(false);
+    expect(matchesText(d, "Sister passport")).toBe(false);
   });
   it("matches across tags", () => {
     expect(matchesText(d, "cbse")).toBe(true);
@@ -57,20 +55,20 @@ describe("matchesText", () => {
 
 describe("applyFilters", () => {
   const docs = [
-    doc({ id: "1", category: "ID & Government", owner: "Aarav", tags: ["passport"], title: "Aarav Passport", path: "ID & Government/Passports" }),
-    doc({ id: "2", category: "ID & Government", owner: "Mom", tags: ["passport"], title: "Mom Passport", path: "ID & Government/Passports" }),
-    doc({ id: "3", category: "Education", owner: "Aarav", tags: ["marksheet"], title: "Aarav Marksheet", path: "Education/Aarav" }),
+    doc({ id: "1", category: "ID & Government", owner: "Sister", tags: ["passport"], title: "Sister Passport", path: "ID & Government/Passports" }),
+    doc({ id: "2", category: "ID & Government", owner: "Mother", tags: ["passport"], title: "Mother Passport", path: "ID & Government/Passports" }),
+    doc({ id: "3", category: "Education", owner: "Sister", tags: ["marksheet"], title: "Sister Marksheet", path: "Education/Sister" }),
     doc({ id: "4", category: "Medical", title: "Cardio Report", doc_date: "2026-02-18", tags: ["report"], path: "Medical/Reports" }),
   ];
 
   it("structured owner+tag with empty free_text returns the whole pinned set (no text gate)", () => {
-    // "Aarav's passports" → owner=Aarav, tag=passport, free_text=""
-    const out = applyFilters(docs, { owner: "Aarav", tag: "passport", free_text: "" }, "Aarav's passports");
+    // "Sister's passports" → owner=Sister, tag=passport, free_text=""
+    const out = applyFilters(docs, { owner: "Sister", tag: "passport", free_text: "" }, "Sister's passports");
     expect(out.map((d) => d.id)).toEqual(["1"]);
   });
 
   it("owner filter alone (no tag) returns all of that owner's docs", () => {
-    const out = applyFilters(docs, { owner: "Aarav" }, "Aarav's documents");
+    const out = applyFilters(docs, { owner: "Sister" }, "Sister's documents");
     expect(out.map((d) => d.id).sort()).toEqual(["1", "3"]);
   });
 
@@ -85,7 +83,7 @@ describe("applyFilters", () => {
   });
 
   it("no-Gemini fallback (raw query as free_text) AND-matches", () => {
-    const out = applyFilters(docs, { free_text: "Aarav's passport" }, "Aarav's passport");
+    const out = applyFilters(docs, { free_text: "Sister's passport" }, "Sister's passport");
     expect(out.map((d) => d.id)).toEqual(["1"]);
   });
 
@@ -105,19 +103,19 @@ describe("applyFilters", () => {
   });
 
   it("falls back to raw-query keyword search when a structured filter yields zero (owner mismatch)", () => {
-    // Gemini guessed owner="Mum" but the vault stores "Mom" — structured pass
-    // finds nothing, so the safety net retries "Mom passport" as free text.
+    // Gemini guessed owner="Mum" but the vault stores "Mother" — structured pass
+    // finds nothing, so the safety net retries "Mother passport" as free text.
     const out = applyFilters(
       docs,
       { owner: "Mum", tag: "passport", free_text: "" },
-      "Mom passport",
+      "Mother passport",
     );
     expect(out.map((d) => d.id)).toEqual(["2"]);
   });
 
   it("does NOT fall back when a structured filter legitimately returns matches", () => {
-    // owner=Mom matches doc 2; no spurious widening to other docs.
-    const out = applyFilters(docs, { owner: "Mom" }, "Mom passport");
+    // owner=Mother matches doc 2; no spurious widening to other docs.
+    const out = applyFilters(docs, { owner: "Mother" }, "Mother passport");
     expect(out.map((d) => d.id)).toEqual(["2"]);
   });
 

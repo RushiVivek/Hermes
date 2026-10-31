@@ -1,9 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { isAuthedFromToken, SESSION_COOKIE_NAME } from "@/lib/session";
+import { isValidSession, SESSION_COOKIE_NAME } from "@/lib/session";
+import { isSameOriginRequest } from "@/lib/origin";
 
 export async function proxy(req: NextRequest) {
+  // Reject cross-site writes before anything else (CSRF defense in depth).
+  if (!isSameOriginRequest(req)) {
+    return NextResponse.json({ error: "Cross-origin request blocked" }, { status: 403 });
+  }
+
   const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;
-  const ok = await isAuthedFromToken(token);
+  const ok = await isValidSession(token);
   if (ok) return NextResponse.next();
 
   // For API routes, redirecting to /login would make fetch() follow the 302

@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { Timestamp } from "firebase-admin/firestore";
 import { revalidatePath } from "next/cache";
 import { docsCol, fromFirestore } from "@/lib/firestore";
-import { deleteFile } from "@/lib/buzzheavier";
-import { adjustAccountUsedBytes } from "@/lib/account-usage";
+import { deleteObject } from "@/lib/r2";
 import { unregisterFolderTree } from "@/lib/folder-store";
 import { isUnderPath } from "@/lib/folders";
 
@@ -12,11 +11,10 @@ export const runtime = "nodejs";
 /** DELETE /api/folders?path=<canonical-folder-path>
  *
  * Soft-deletes every active doc whose `path` is the given path or any
- * descendant of it, then best-effort deletes the corresponding Buzzheavier
- * blobs and adjusts each account's used-bytes counter.
+ * descendant of it, then best-effort deletes the corresponding R2 blobs.
  *
  * Returns:
- *   { deleted: number, blobErrors: Array<{ id, error }> }
+ *   { deleted: number, blobErrors: Array<{ id }> }
  *
  * The path is required and must be non-empty — deleting "everything" is
  * intentionally not supported via this endpoint to avoid the worst foot-gun.
@@ -60,32 +58,14 @@ export async function DELETE(req: Request) {
   }
   await writer.commit();
 
-  // Best-effort blob cleanup. Awaited (Vercel/Lambda would otherwise reap
-  // pending fetches).
-  const blobErrors: Array<{ id: string; error: string }> = [];
+  // Best-effort blob cleanup; failures leave unreferenced orphans.
+  const blobErrors: Array<{ id: string }> = [];
   for (const doc of targets) {
     try {
-      const res = await deleteFile({
-        buzzheavier_id: doc.buzzheavier_id,
-        buzzheavier_account_id: doc.buzzheavier_account_id,
-      });
-      if (res.ok) {
-        // Update the per-account counter only on confirmed delete.
-        try {
-          await adjustAccountUsedBytes(
-            doc.buzzheavier_account_id,
-            -doc.size_bytes,
-          );
-        } catch (err) {
-          console.warn(
-            `[hermes] used-bytes adjust after folder delete failed: ${(err as Error).message}`,
-          );
-        }
-      } else {
-        blobErrors.push({ id: doc.id, error: `${res.status}` });
-      }
+      await deleteObject(doc.storage_key);
     } catch (e) {
-      blobErrors.push({ id: doc.id, error: (e as Error).message });
+      console.warn(`[hermes] R2 delete failed for ${doc.id}: ${(e as Error).message}`);
+      blobErrors.push({ id: doc.id });
     }
   }
 

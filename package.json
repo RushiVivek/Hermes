@@ -6,14 +6,16 @@
     "dev": "next dev -p 28085",
     "build": "next build",
     "start": "next start -p ${PORT:-28085}",
-    "seed": "node --env-file=.env.local --import tsx scripts/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "buzzheavier:smoke": "node --env-file=.env.local --import tsx scripts/buzzheavier-smoke.ts",
     "wipe": "node --env-file=.env.local --import tsx scripts/wipe.ts",
+    "r2:smoke": "node --env-file=.env.local --import tsx scripts/r2-smoke.ts",
+    "hash-password": "node --import tsx scripts/hash-password.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1161.0",
+    "@aws-sdk/s3-request-presigner": "^3.1161.0",
     "@google/genai": "^2.8.0",
     "@types/archiver": "^8.0.0",
     "archiver": "^8.0.0",

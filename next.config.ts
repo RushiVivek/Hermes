@@ -1,20 +1,30 @@
 import type { NextConfig } from "next";
 
+const securityHeaders = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "same-origin" },
+  { key: "X-Frame-Options", value: "DENY" },
+  ...(process.env.NODE_ENV === "production"
+    ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }]
+    : []),
+];
+
 const nextConfig: NextConfig = {
   experimental: {
     // We use proxy.ts (middleware), so Next buffers each request body through
-    // the proxy with a default 10MB cap. Family docs (phone photos, scanned
-    // PDFs) routinely exceed that, so raise it. The route itself enforces a
-    // 250MB-per-request ceiling.
+    // the proxy with a default 10MB cap. A batch of phone photos / scanned
+    // PDFs exceeds that, so raise it — to just above the upload route's
+    // MAX_UPLOAD_BYTES (100MB, lib/types.ts) plus multipart overhead, so an
+    // oversized batch gets the route's clear 413 instead of a truncated body.
+    // Kept tight because every byte here sits in RAM (512MB on Render free).
     //
-    // NOTE: this only governs the proxy buffer for `npm run dev` / a
-    // self-hosted Node server. On Vercel, serverless functions have their own
-    // hard request-body limit (~4.5MB) that this setting CANNOT raise — a file
-    // larger than that will fail once deployed because the upload streams
-    // through our function. The real fix for Vercel is a direct
-    // client→Buzzheavier upload path (deferred; needs the account token off
-    // the client).
-    proxyClientMaxBodySize: "300mb",
+    // NOTE: this only governs a persistent Node server (Render / `npm run
+    // dev`). Serverless hosts like Vercel cap request bodies at ~4.5MB
+    // regardless, which is why hermes runs on Render.
+    proxyClientMaxBodySize: "110mb",
+  },
+  async headers() {
+    return [{ source: "/:path*", headers: securityHeaders }];
   },
 };
 

@@ -55,7 +55,7 @@ export default function ChatView() {
       <div className="flex-1">
         <h1 className="text-xl font-semibold">Find a document</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Ask in plain words — e.g. “Aarav’s 10th marksheet” or “our passports”.
+          Ask in plain words — e.g. “10th marksheet” or “our passports”.
         </p>
 
         {error && (

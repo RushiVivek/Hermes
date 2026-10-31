@@ -1,26 +1,21 @@
-// Hard-wipe every active doc + its Buzzheavier blob.
+// Hard-wipe every active/pending doc + its R2 blob.
 // Run via:    npm run wipe
 //
 // Use cases:
-//   - Clear seed data after first deploy.
 //   - Reset the vault during dev.
 //   - Recover from an aborted import.
 //
 // What it does, in order:
-//   1) Lists every doc with status='active' (skips already-deleted rows).
+//   1) Lists every doc with status active or pending_confirm.
 //   2) Prompts for confirmation: prints the count and asks you to type "WIPE".
-//   3) For each doc, awaits Buzzheavier DELETE (decrementing the per-account
-//      used-bytes counter on success), then marks the Firestore row deleted.
-//
-// Seeded fixture docs live under buzzheavier_account_id="demo-account" which
-// won't be in BUZZHEAVIER_ACCOUNTS. Their blob deletes will fail — that's
-// expected; the row still gets soft-deleted.
+//   3) For each doc, deletes the R2 blob, then marks the Firestore row deleted.
+//   4) Clears the folder registry and login rate-limit records.
 
 import { Timestamp } from "firebase-admin/firestore";
 import readline from "node:readline";
 import { docsCol, fromFirestore, getDb } from "@/lib/firestore";
-import { deleteFile } from "@/lib/buzzheavier";
-import { adjustAccountUsedBytes } from "@/lib/account-usage";
+import { deleteObject } from "@/lib/r2";
+import { LOGIN_ATTEMPTS_COLLECTION } from "@/lib/rate-limit";
 
 async function confirm(prompt: string): Promise<boolean> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -34,9 +29,20 @@ async function confirm(prompt: string): Promise<boolean> {
   }
 }
 
+async function clearCollection(name: string): Promise<number> {
+  const db = getDb();
+  const snap = await db.collection(name).get();
+  if (!snap.empty) {
+    const batch = db.batch();
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  }
+  return snap.size;
+}
+
 async function main() {
   // Wipe both live docs and abandoned auto-organize drafts (pending_confirm
-  // rows the user never confirmed and whose blobs are still on Buzzheavier).
+  // rows the user never confirmed and whose blobs are still in R2).
   const snap = await docsCol()
     .where("status", "in", ["active", "pending_confirm"])
     .get();
@@ -60,54 +66,30 @@ async function main() {
 
   let blobOk = 0;
   let blobErr = 0;
-  let rowOk = 0;
-  const db = getDb();
-  const writer = db.batch();
+  const writer = getDb().batch();
   const now = Timestamp.now();
 
   for (const d of docs) {
     try {
-      const res = await deleteFile({
-        buzzheavier_id: d.buzzheavier_id,
-        buzzheavier_account_id: d.buzzheavier_account_id,
-      });
-      if (res.ok) {
-        blobOk++;
-        try {
-          await adjustAccountUsedBytes(d.buzzheavier_account_id, -d.size_bytes);
-        } catch {
-          // Counter drift is recoverable on next probe.
-        }
-      } else {
-        blobErr++;
-        console.warn(
-          `  blob ${d.buzzheavier_id} (acct "${d.buzzheavier_account_id.slice(0, 6)}…"): HTTP ${res.status}`,
-        );
-      }
+      await deleteObject(d.storage_key);
+      blobOk++;
     } catch (e) {
       blobErr++;
-      console.warn(
-        `  blob ${d.buzzheavier_id} (acct "${d.buzzheavier_account_id.slice(0, 6)}…"): ${(e as Error).message}`,
-      );
+      console.warn(`  blob ${d.storage_key}: ${(e as Error).message}`);
     }
     writer.update(docsCol().doc(d.id), { status: "deleted", deleted_at: now });
-    rowOk++;
   }
 
   await writer.commit();
 
-  // Clear the persistent folder registry too, so emptied folders don't linger
-  // after a wipe.
-  const folderSnap = await db.collection("folders").get();
-  if (!folderSnap.empty) {
-    const fb = db.batch();
-    folderSnap.docs.forEach((d) => fb.delete(d.ref));
-    await fb.commit();
-  }
+  // Clear the persistent folder registry too, so emptied folders don't linger.
+  const folders = await clearCollection("folders");
+  const attempts = await clearCollection(LOGIN_ATTEMPTS_COLLECTION);
 
   console.log(
-    `\nDone. Rows soft-deleted: ${rowOk}. Blobs deleted: ${blobOk}. ` +
-      `Blob errors: ${blobErr}. Folder entries cleared: ${folderSnap.size}.`,
+    `\nDone. Rows soft-deleted: ${docs.length}. Blobs deleted: ${blobOk}. ` +
+      `Blob errors: ${blobErr}. Folder entries cleared: ${folders}. ` +
+      `Login-attempt records cleared: ${attempts}.`,
   );
 }
 

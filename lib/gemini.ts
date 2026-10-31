@@ -12,7 +12,7 @@ import { CATEGORIES, type Category } from "./types";
 const MODEL = "gemini-2.5-flash";
 // Cap input we send to Gemini. Above this, classification accuracy doesn't
 // improve and we'd just burn quota / latency. The blob itself is already on
-// Buzzheavier at full size; this only limits what we send the model.
+// R2 at full size; this only limits what we send the model.
 const MAX_INLINE_BYTES = 12 * 1024 * 1024;
 
 export interface DocSuggestion {
@@ -67,7 +67,7 @@ const RESPONSE_SCHEMA = {
     title: {
       type: Type.STRING,
       description:
-        "Short human title, e.g. 'Aarav 10th Board Marksheet 2023'. No file extension.",
+        "Short human title, e.g. '10th Board Marksheet 2023'. No file extension.",
     },
     category: {
       type: Type.STRING,
@@ -77,7 +77,7 @@ const RESPONSE_SCHEMA = {
     subfolder: {
       type: Type.STRING,
       description:
-        "Optional nested folder under the category, e.g. 'Aarav/Marksheets'. Empty string if none. Never include the category itself.",
+        "Optional nested folder under the category, e.g. 'Marksheets/2023'. Empty string if none. Never include the category itself.",
     },
     owner: {
       type: Type.STRING,
@@ -208,7 +208,7 @@ export async function extractDocMeta(
 export interface QueryFilters {
   category?: Category;
   owner?: string;
-  /** Path prefix, e.g. "Education/Aarav" — matches that folder and below. */
+  /** Path prefix, e.g. "Education/Marksheets" — matches that folder and below. */
   path_prefix?: string;
   tag?: string;
   /** Inclusive ISO date bounds on doc_date. */

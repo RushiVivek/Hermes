@@ -2,15 +2,20 @@ import { NextResponse } from "next/server";
 import { Timestamp } from "firebase-admin/firestore";
 import { docsCol } from "@/lib/firestore";
 import {
-  pickAccountForUpload,
-  uploadFile,
-  deleteFile,
-  isTransientPickError,
-} from "@/lib/buzzheavier";
-import { adjustAccountUsedBytes } from "@/lib/account-usage";
+  STORAGE_CAP_BYTES,
+  deleteObject,
+  putObject,
+  storageKey,
+} from "@/lib/r2";
+import { isAllowedMime } from "@/lib/mime";
 import { registerFolderPath } from "@/lib/folder-store";
 import { extractDocMeta, geminiConfigured, type DocSuggestion } from "@/lib/gemini";
-import { CATEGORIES, type Category } from "@/lib/types";
+import {
+  CATEGORIES,
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_FILES,
+  type Category,
+} from "@/lib/types";
 import { revalidatePath } from "next/cache";
 
 export const runtime = "nodejs";
@@ -33,9 +38,6 @@ interface UploadErrorItem {
   error: string;
 }
 
-const MAX_FILES = 25;
-const MAX_BYTES = 250 * 1024 * 1024;
-
 export async function POST(req: Request) {
   let form: FormData;
   try {
@@ -51,18 +53,18 @@ export async function POST(req: Request) {
   if (files.length === 0) {
     return NextResponse.json({ error: "No files provided" }, { status: 400 });
   }
-  if (files.length > MAX_FILES) {
+  if (files.length > MAX_UPLOAD_FILES) {
     return NextResponse.json(
-      { error: `Too many files in one upload (max ${MAX_FILES}).` },
+      { error: `Too many files in one upload (max ${MAX_UPLOAD_FILES}).` },
       { status: 413 },
     );
   }
   const totalBytes = files.reduce((n, f) => n + f.size, 0);
-  if (totalBytes > MAX_BYTES) {
+  if (totalBytes > MAX_UPLOAD_BYTES) {
     return NextResponse.json(
       {
         error: `Upload too large (${(totalBytes / (1024 * 1024)).toFixed(0)} MB; ` +
-          `max ${MAX_BYTES / (1024 * 1024)} MB per request).`,
+          `max ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB at once — upload fewer files at a time).`,
       },
       { status: 413 },
     );
@@ -79,34 +81,35 @@ export async function POST(req: Request) {
     manual = parsed;
   }
 
-  // Pick a Buzzheavier account once for the whole batch.
-  let account: Awaited<ReturnType<typeof pickAccountForUpload>>;
-  try {
-    account = await pickAccountForUpload(totalBytes);
-  } catch (e) {
-    const status = isTransientPickError(e) ? 502 : 507;
-    return NextResponse.json({ error: (e as Error).message }, { status });
+  // One read serves both the free-tier cap (stored bytes = every blob still
+  // in R2: active docs + unconfirmed drafts) and, in auto mode, the known
+  // owners/paths that nudge Gemini toward reusing existing names.
+  const stored = await docsCol()
+    .where("status", "in", ["active", "pending_confirm"])
+    .get();
+  let usedBytes = 0;
+  const owners = new Set<string>();
+  const paths = new Set<string>();
+  stored.forEach((d) => {
+    const data = d.data();
+    if (typeof data.size_bytes === "number") usedBytes += data.size_bytes;
+    if (data.status !== "active") return;
+    if (typeof data.owner === "string" && data.owner) owners.add(data.owner);
+    if (typeof data.path === "string" && data.path) paths.add(data.path);
+  });
+  if (usedBytes + totalBytes > STORAGE_CAP_BYTES) {
+    const gb = (n: number) => (n / 1e9).toFixed(2);
+    return NextResponse.json(
+      {
+        error:
+          `Storage is almost full (${gb(usedBytes)} of ${gb(STORAGE_CAP_BYTES)} GB used). ` +
+          `Delete some documents first.`,
+      },
+      { status: 507 },
+    );
   }
-
-  // For auto mode we may need known owners/paths to nudge Gemini toward reuse.
-  let knownOwners: string[] = [];
-  let knownPaths: string[] = [];
-  if (autoOrganize) {
-    try {
-      const snap = await docsCol().where("status", "==", "active").get();
-      const owners = new Set<string>();
-      const paths = new Set<string>();
-      snap.forEach((d) => {
-        const data = d.data();
-        if (typeof data.owner === "string" && data.owner) owners.add(data.owner);
-        if (typeof data.path === "string" && data.path) paths.add(data.path);
-      });
-      knownOwners = [...owners];
-      knownPaths = [...paths];
-    } catch {
-      // Non-fatal — Gemini just won't get the reuse hints.
-    }
-  }
+  const knownOwners = [...owners];
+  const knownPaths = [...paths];
 
   const created: UploadResultItem[] = [];
   const errors: UploadErrorItem[] = [];
@@ -116,6 +119,10 @@ export async function POST(req: Request) {
     const file = files[index];
     const filename = file.name || "untitled";
     const mime = file.type || "application/octet-stream";
+    if (!isAllowedMime(mime)) {
+      errors.push({ index, filename, error: "Only images and PDFs can be stored." });
+      continue;
+    }
 
     let bytes: Uint8Array;
     try {
@@ -139,11 +146,14 @@ export async function POST(req: Request) {
       });
     }
 
-    let blob: { buzzheavier_id: string; buzzheavier_url: string; buzzheavier_account_id: string };
+    // The Firestore id doubles as the blob key, so allocate it first.
+    const ref = docsCol().doc();
+    const key = storageKey(ref.id);
     try {
-      blob = await uploadFile(account, { bytes, filename, mime });
+      await putObject(key, bytes, mime);
     } catch (e) {
-      errors.push({ index, filename, error: (e as Error).message });
+      console.warn(`[hermes] R2 upload failed for ${ref.id}: ${(e as Error).message}`);
+      errors.push({ index, filename, error: "Couldn't store the file. Try again." });
       continue;
     }
 
@@ -154,7 +164,6 @@ export async function POST(req: Request) {
     const status = autoOrganize ? "pending_confirm" : "active";
 
     try {
-      const ref = docsCol().doc();
       await ref.set({
         path: fields.path,
         title: fields.title,
@@ -162,9 +171,7 @@ export async function POST(req: Request) {
         owner: fields.owner,
         doc_date: fields.doc_date,
         tags: fields.tags,
-        buzzheavier_id: blob.buzzheavier_id,
-        buzzheavier_url: blob.buzzheavier_url,
-        buzzheavier_account_id: blob.buzzheavier_account_id,
+        storage_key: key,
         mime,
         size_bytes: file.size,
         uploaded_at: Timestamp.now(),
@@ -188,36 +195,14 @@ export async function POST(req: Request) {
         pending: autoOrganize,
       });
       if (!autoOrganize) finalizedPaths.add(fields.path);
-      // Count bytes now — the blob is on Buzzheavier regardless of whether this
-      // is an active or pending_confirm doc. Confirm doesn't re-count; discard
-      // and delete decrement. KNOWN LEAK: if an auto-organize draft is never
-      // confirmed or discarded (user closes the tab), the bytes stay counted
-      // and the blob lingers. It's bounded by how often that happens, and
-      // getAccountUsedBytes()'s backfill (which walks the real tree, pending
-      // blobs included) keeps the counter consistent with reality rather than
-      // drifting. A periodic sweep of stale pending_confirm rows is the proper
-      // fix if it ever matters at family scale.
-      void adjustAccountUsedBytes(blob.buzzheavier_account_id, file.size).catch(
-        (err) => {
-          console.warn(
-            `[hermes] failed to adjust used_bytes for account: ${(err as Error).message}`,
-          );
-        },
-      );
     } catch (e) {
       try {
-        await deleteFile({
-          buzzheavier_id: blob.buzzheavier_id,
-          buzzheavier_account_id: blob.buzzheavier_account_id,
-        });
+        await deleteObject(key);
       } catch {
-        // Already in the failure path; orphan blob is recoverable manually.
+        // Already in the failure path; an orphan blob is harmless (unreferenced).
       }
-      errors.push({
-        index,
-        filename,
-        error: `Firestore write failed: ${(e as Error).message}`,
-      });
+      console.warn(`[hermes] Firestore write failed for ${ref.id}: ${(e as Error).message}`);
+      errors.push({ index, filename, error: "Couldn't save the document. Try again." });
     }
   }
 

@@ -1,14 +1,13 @@
 import { NextResponse } from "next/server";
 import { docsCol, fromFirestore } from "@/lib/firestore";
-import { deleteFile } from "@/lib/buzzheavier";
-import { adjustAccountUsedBytes } from "@/lib/account-usage";
+import { deleteObject } from "@/lib/r2";
 
 export const runtime = "nodejs";
 
 /**
  * POST /api/docs/discard — throw away pending_confirm docs the user chose not
  * to keep (e.g. backed out of the confirm screen). Hard-removes the Firestore
- * row and best-effort deletes the Buzzheavier blob. Body: { ids: string[] }.
+ * row and best-effort deletes the R2 blob. Body: { ids: string[] }.
  *
  * Only operates on pending_confirm docs — never deletes an active doc, so a
  * stray/duplicate call can't destroy saved data.
@@ -52,20 +51,11 @@ export async function POST(req: Request) {
 
     // Best-effort blob cleanup, then remove the row entirely (it was never
     // shown in browse, so a hard delete is fine and keeps the collection tidy).
-    let blobOk = false;
     try {
-      const res = await deleteFile({
-        buzzheavier_id: doc.buzzheavier_id,
-        buzzheavier_account_id: doc.buzzheavier_account_id,
-      });
-      blobOk = res.ok;
-    } catch {
-      // ignore — orphan blob is recoverable manually
-    }
-    if (blobOk) {
-      void adjustAccountUsedBytes(doc.buzzheavier_account_id, -doc.size_bytes).catch(
-        () => {},
-      );
+      await deleteObject(doc.storage_key);
+    } catch (e) {
+      // An orphan blob is unreferenced; log it and still drop the draft.
+      console.warn(`[hermes] R2 delete failed for draft ${id}: ${(e as Error).message}`);
     }
     await ref.delete();
     discarded++;

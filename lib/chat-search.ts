@@ -9,9 +9,9 @@ import type { QueryFilters } from "./gemini";
 export const MAX_RESULTS = 50;
 
 /** Tokenize for matching: lowercase, split on anything that isn't a letter or
- * digit (so the possessive in "Aarav's" splits into "aarav" + "s"), then drop
+ * digit (so the possessive in "Sister's" splits into "sister" + "s"), then drop
  * 1-char tokens (kills the stray "s", articles, punctuation noise). This makes
- * "Aarav's passport" → ["aarav","passport"], matching owner "Aarav". */
+ * "Sister's passport" → ["sister","passport"], matching owner "Sister". */
 export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
@@ -47,7 +47,7 @@ function filterOnce(docs: Doc[], f: QueryFilters, rawQuery: string): Doc[] {
     f.category || f.owner || f.path_prefix || f.tag || f.date_from || f.date_to,
   );
   // Skip the text gate only when structured filters pinned the set AND the
-  // parser left no leftover free_text of its own — e.g. "all of Aarav's
+  // parser left no leftover free_text of its own — e.g. "all of Sister's
   // passports" → owner+tag, return the whole set without also keyword-gating.
   const skipTextGate = hasStructured && !(f.free_text ?? "").trim();
 
@@ -74,7 +74,7 @@ export function applyFilters(
 ): Doc[] {
   const out = filterOnce(docs, f, rawQuery);
   // Safety net: structured filters come from Gemini and can be slightly off
-  // (e.g. owner "Mum" when the vault has "Mom"), which would silently return
+  // (e.g. owner "Mum" when the vault has "Mother"), which would silently return
   // zero. If a structured query finds nothing, retry as a plain keyword search
   // over the raw query so the user still gets the obvious matches.
   const hadStructured = Boolean(

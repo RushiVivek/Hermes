@@ -3,17 +3,11 @@ import { Readable } from "node:stream";
 import { ZipArchive, type Archiver } from "archiver";
 import { docsCol, fromFirestore } from "@/lib/firestore";
 import { isUnderPath } from "@/lib/folders";
+import { extFromMime } from "@/lib/mime";
+import { getObjectBytes } from "@/lib/r2";
 import type { Doc } from "@/lib/types";
 
 export const runtime = "nodejs";
-
-const BROWSER_HEADERS: Record<string, string> = {
-  Accept: "*/*",
-  "Cache-Control": "no-cache",
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 " +
-    "(KHTML, like Gecko) Chrome/130.0 Safari/537.36",
-};
 
 /**
  * GET /api/export[?path=Folder/Sub] — stream a ZIP of documents.
@@ -22,7 +16,7 @@ const BROWSER_HEADERS: Record<string, string> = {
  * - Without `path`: the whole vault.
  *
  * The archive mirrors the folder tree; each file is named by its doc title +
- * an extension sniffed from its mime type. Blobs are fetched from Buzzheavier
+ * an extension sniffed from its mime type. Blobs are fetched from R2
  * sequentially and piped into the archive, so memory stays flat regardless of
  * vault size (we're on a persistent Node server, not serverless).
  */
@@ -79,20 +73,13 @@ async function appendAll(archive: Archiver, docs: Doc[]) {
   try {
     for (const doc of docs) {
       const entryPath = archiveEntryPath(doc, usedNames);
-      let res: Response;
+      let buf: Buffer;
       try {
-        res = await fetch(cacheBust(doc.buzzheavier_url), {
-          headers: BROWSER_HEADERS,
-        });
+        buf = Buffer.from(await getObjectBytes(doc.storage_key));
       } catch (e) {
-        console.warn(`[export] fetch failed for ${doc.id}: ${(e as Error).message}`);
+        console.warn(`[export] R2 read failed for ${doc.id}: ${(e as Error).message}`);
         continue; // skip this file rather than break the whole zip
       }
-      if (!res.ok) {
-        console.warn(`[export] ${doc.id} returned ${res.status}, skipping`);
-        continue;
-      }
-      const buf = Buffer.from(await res.arrayBuffer());
       // Attach the drain listeners BEFORE append() — append() emits 'error'
       // synchronously on bad input, so the listeners must already be in place.
       await new Promise<void>((resolve) => {
@@ -149,24 +136,4 @@ function archiveEntryPath(doc: Doc, usedNames: Map<string, number>): string {
         : `${base} (${seen + 1})`;
   }
   return folder ? `${folder}/${base}` : base;
-}
-
-function extFromMime(mime: string): string {
-  const m = (mime || "").split(";")[0].trim().toLowerCase();
-  const map: Record<string, string> = {
-    "application/pdf": ".pdf",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/heic": ".heic",
-    "image/heif": ".heif",
-    "image/webp": ".webp",
-    "image/gif": ".gif",
-    "text/plain": ".txt",
-  };
-  return map[m] ?? "";
-}
-
-function cacheBust(u: string): string {
-  const sep = u.includes("?") ? "&" : "?";
-  return `${u}${sep}_=${Math.random().toString(36).slice(2, 10)}`;
 }
