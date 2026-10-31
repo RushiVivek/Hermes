@@ -2,13 +2,19 @@
 // restarts (Render's free tier sleeps and wakes often).
 //
 // Two limits:
-//   - per client IP: 5 failures in 15 min → locked 15 min, doubling on each
+//   - per client IP: 5 attempts in 15 min → locked 15 min, doubling on each
 //     repeat lockout (capped at 24 h); a successful login resets it.
-//   - global backstop: 100 failures in 1 h across all IPs → all *new* logins
-//     paused 15 min. Devices already signed in are unaffected.
+//   - global backstop: 100 attempts in 1 h across all IPs → logins paused
+//     15 min, EXCEPT from "known devices" (a cookie set on a previous
+//     successful login, lib/session.ts) — so a distributed attacker can't lock
+//     the family out. Devices already signed in are unaffected either way.
 //
-// The policy math is pure (recordFailure / lockRemaining) and unit-tested;
-// the Firestore wrappers below just load/store the state.
+// Attempts are counted *before* the password is checked, inside one
+// transaction with the lock check (beginLoginAttempt). Checking first and
+// recording after would let a burst of parallel guesses all pass the check.
+//
+// The policy math is pure (recordFailure / lockRemaining / decideAttempt) and
+// unit-tested; the Firestore wrappers below just load/store the state.
 
 import { createHash } from "node:crypto";
 import { getDb } from "./firestore";
@@ -82,10 +88,35 @@ export function recordFailure(
   return s;
 }
 
-/** Client IP for rate limiting. Render's proxy *appends* the address it saw
- * to X-Forwarded-For, so the rightmost entry is trustworthy; anything to its
- * left was supplied by the client and can be forged. */
+/** Reserve one login attempt: if neither limit is locked, count the attempt
+ * against both and allow it; otherwise refuse without counting. */
+export function decideAttempt(
+  ip: AttemptState | undefined,
+  global: AttemptState | undefined,
+  now: number,
+  knownDevice: boolean,
+): { lockedMs: number; ip?: AttemptState; global?: AttemptState } {
+  const lockedMs = Math.max(
+    lockRemaining(ip, now),
+    knownDevice ? 0 : lockRemaining(global, now),
+  );
+  if (lockedMs > 0) return { lockedMs };
+  return {
+    lockedMs: 0,
+    ip: recordFailure(ip, now, IP_POLICY),
+    global: recordFailure(global, now, GLOBAL_POLICY),
+  };
+}
+
+/** Client IP for rate limiting. Every Render service sits behind Cloudflare,
+ * which overwrites CF-Connecting-IP (and True-Client-IP, when enabled) with
+ * the real client address, so clients can't forge them. X-Forwarded-For is
+ * only a local-dev fallback: Render appends to a client-supplied value, so on
+ * Render its entries can be forged or be shared edge addresses. */
 export function clientIp(req: Request): string {
+  const trusted =
+    req.headers.get("cf-connecting-ip") ?? req.headers.get("true-client-ip");
+  if (trusted?.trim()) return trusted.trim();
   const xff = req.headers.get("x-forwarded-for");
   const last = xff?.split(",").map((s) => s.trim()).filter(Boolean).at(-1);
   return last || "unknown";
@@ -112,30 +143,23 @@ function asState(data: FirebaseFirestore.DocumentData | undefined): AttemptState
   };
 }
 
-/** Milliseconds until this IP may try again (0 = allowed now). */
-export async function loginLockRemaining(ip: string): Promise<number> {
-  const now = Date.now();
-  const [ipSnap, globalSnap] = await Promise.all([
-    col().doc(ipDocId(ip)).get(),
-    col().doc(GLOBAL_DOC_ID).get(),
-  ]);
-  return Math.max(
-    lockRemaining(asState(ipSnap.data()), now),
-    lockRemaining(asState(globalSnap.data()), now),
-  );
-}
-
-export async function recordLoginFailure(ip: string): Promise<void> {
+/** Atomically check the locks and count this attempt (see decideAttempt).
+ * Returns milliseconds until the caller may try again; 0 = go ahead and
+ * check the password. Firestore serializes transactions on the same docs,
+ * so parallel requests can't all slip past the check. */
+export async function beginLoginAttempt(ip: string, knownDevice: boolean): Promise<number> {
   const ipRef = col().doc(ipDocId(ip));
   const globalRef = col().doc(GLOBAL_DOC_ID);
-  await getDb().runTransaction(async (tx) => {
+  return await getDb().runTransaction(async (tx) => {
     const [ipSnap, globalSnap] = await Promise.all([tx.get(ipRef), tx.get(globalRef)]);
-    const now = Date.now();
-    tx.set(ipRef, recordFailure(asState(ipSnap.data()), now, IP_POLICY));
-    tx.set(globalRef, recordFailure(asState(globalSnap.data()), now, GLOBAL_POLICY));
+    const d = decideAttempt(asState(ipSnap.data()), asState(globalSnap.data()), Date.now(), knownDevice);
+    if (d.ip) tx.set(ipRef, d.ip);
+    if (d.global) tx.set(globalRef, d.global);
+    return d.lockedMs;
   });
 }
 
+/** After a correct password: forget this IP's counted attempts. */
 export async function clearLoginFailures(ip: string): Promise<void> {
   await col().doc(ipDocId(ip)).delete();
 }

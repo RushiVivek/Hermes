@@ -56,7 +56,7 @@ npm run dev             # http://localhost:28085
 ## Security model
 - One shared password, stored only as an scrypt hash. Sessions are 30-day signed cookies (`HttpOnly`, `SameSite=Lax`, `Secure` in prod).
 - The session signing key is derived from `SESSION_SECRET` + the password hash, so **changing the password signs everyone out**. Rotating `SESSION_SECRET` does the same.
-- Login lockout: 5 wrong tries from one IP locks it for 15 min, and the lock doubles on each repeat (max 24 h). 100 wrong tries per hour across all IPs pauses new logins for 15 min.
+- Login lockout: 5 tries from one IP within 15 min locks it for 15 min, and the lock doubles on each repeat (max 24 h). 100 tries per hour across all IPs pauses logins for 15 min, except on devices that have signed in before. Attempts are counted atomically before the password check, so parallel guessing doesn't get extra tries.
 - State-changing API calls must come from this site's Origin. Security headers (`nosniff`, `X-Frame-Options: DENY`, HSTS) are set on every response.
 - Only images and PDFs are accepted (checked server-side), and only those are ever served inline.
 

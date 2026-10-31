@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { checkPassword } from "@/lib/password";
-import { createSession, setSessionCookie } from "@/lib/session";
-import { isSameOriginRequest } from "@/lib/origin";
 import {
-  clearLoginFailures,
-  clientIp,
-  loginLockRemaining,
-  recordLoginFailure,
-} from "@/lib/rate-limit";
+  createSession,
+  isKnownDevice,
+  setDeviceCookie,
+  setSessionCookie,
+} from "@/lib/session";
+import { isSameOriginRequest } from "@/lib/origin";
+import { beginLoginAttempt, clearLoginFailures, clientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -17,8 +17,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Cross-origin request blocked" }, { status: 403 });
   }
 
+  // Count this attempt before checking the password (atomic with the lock
+  // check), so parallel guesses can't all slip past the limit.
   const ip = clientIp(req);
-  const lockedMs = await loginLockRemaining(ip);
+  const lockedMs = await beginLoginAttempt(ip, await isKnownDevice());
   if (lockedMs > 0) {
     const minutes = Math.ceil(lockedMs / 60_000);
     return NextResponse.json(
@@ -45,7 +47,6 @@ export async function POST(req: Request) {
   }
   // Long inputs only burn scrypt CPU; no real password is this long.
   if (password.length > 1024 || !(await checkPassword(password))) {
-    await recordLoginFailure(ip);
     await new Promise((r) => setTimeout(r, 600));
     return NextResponse.json({ error: "Wrong password" }, { status: 401 });
   }
@@ -53,5 +54,6 @@ export async function POST(req: Request) {
   await clearLoginFailures(ip);
   const token = await createSession();
   await setSessionCookie(token);
+  await setDeviceCookie();
   return NextResponse.json({ ok: true });
 }

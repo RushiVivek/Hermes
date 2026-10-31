@@ -3,6 +3,7 @@ import {
   GLOBAL_POLICY,
   IP_POLICY,
   clientIp,
+  decideAttempt,
   lockRemaining,
   recordFailure,
   type AttemptState,
@@ -66,17 +67,50 @@ describe("recordFailure (global policy)", () => {
   });
 });
 
-describe("clientIp", () => {
-  const req = (xff?: string) =>
-    new Request("http://x/", { headers: xff ? { "x-forwarded-for": xff } : {} });
+describe("decideAttempt", () => {
+  it("counts the attempt up front: exactly 5 allowed, the 6th refused uncounted", () => {
+    let ip: AttemptState | undefined;
+    let global: AttemptState | undefined;
+    for (let i = 0; i < 5; i++) {
+      const d = decideAttempt(ip, global, 0, false);
+      expect(d.lockedMs).toBe(0);
+      ip = d.ip;
+      global = d.global;
+    }
+    const sixth = decideAttempt(ip, global, 0, false);
+    expect(sixth.lockedMs).toBe(15 * MIN);
+    expect(sixth.ip).toBeUndefined(); // a refused attempt writes nothing
+    expect(sixth.global).toBeUndefined();
+  });
 
-  it("takes the rightmost (proxy-appended) X-Forwarded-For entry", () => {
-    expect(clientIp(req("6.6.6.6, 1.2.3.4"))).toBe("1.2.3.4");
+  it("lets a known device past the global backstop", () => {
+    const global = failN(100, undefined, 0, GLOBAL_POLICY);
+    expect(decideAttempt(undefined, global, 0, false).lockedMs).toBe(15 * MIN);
+    expect(decideAttempt(undefined, global, 0, true).lockedMs).toBe(0);
   });
-  it("handles a single entry", () => {
-    expect(clientIp(req("1.2.3.4"))).toBe("1.2.3.4");
+
+  it("still applies the per-IP lock to a known device", () => {
+    const ip = failN(5, undefined, 0);
+    expect(decideAttempt(ip, undefined, 0, true).lockedMs).toBe(15 * MIN);
   });
-  it("falls back when the header is absent", () => {
+});
+
+describe("clientIp", () => {
+  const req = (headers: Record<string, string> = {}) =>
+    new Request("http://x/", { headers });
+
+  it("prefers Cloudflare's CF-Connecting-IP over a forgeable X-Forwarded-For", () => {
+    expect(
+      clientIp(req({ "cf-connecting-ip": "1.2.3.4", "x-forwarded-for": "6.6.6.6, 9.9.9.9" })),
+    ).toBe("1.2.3.4");
+  });
+  it("uses True-Client-IP when CF-Connecting-IP is absent", () => {
+    expect(clientIp(req({ "true-client-ip": "1.2.3.4" }))).toBe("1.2.3.4");
+  });
+  it("falls back to the rightmost X-Forwarded-For entry (local dev)", () => {
+    expect(clientIp(req({ "x-forwarded-for": "6.6.6.6, 1.2.3.4" }))).toBe("1.2.3.4");
+  });
+  it("falls back when no header is present", () => {
     expect(clientIp(req())).toBe("unknown");
   });
 });

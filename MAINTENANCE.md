@@ -92,12 +92,21 @@ Pages-Router index. Don't "fix" this by renaming to middleware.ts.
   Changing the password or rotating the secret invalidates every cookie. That
   is the "sign out all devices" button.
 - **Rate limiting** (`lib/rate-limit.ts`): the policy math is pure and unit-tested;
-  state is in Firestore so it survives Render restarts. Per IP: 5 failures/15 min →
-  15 min lock, doubling per repeat lockout, capped at 24 h. Global: 100 failures/h →
-  15 min pause for new logins. The client IP is the **rightmost** `X-Forwarded-For`
-  entry (Render appends it; the left side is client-forgeable). If you ever put
-  a Cloudflare proxy in front of Render, every client shares Cloudflare's edge IPs,
-  so switch `clientIp` to `CF-Connecting-IP`.
+  state is in Firestore so it survives Render restarts. Per IP: 5 attempts/15 min →
+  15 min lock, doubling per repeat lockout, capped at 24 h. Global: 100 attempts/h →
+  15 min pause, which **known devices skip** (`hermes_device` cookie, set on any
+  successful login, signed with its own key; it's not a credential). That stops a
+  distributed attacker from locking the family out.
+  - Each attempt is counted *before* the password check, in one Firestore
+    transaction with the lock check (`beginLoginAttempt`). A correct password then
+    clears the IP's count. Check-then-record would let parallel guesses slip past.
+  - Client IP = `CF-Connecting-IP` (Cloudflare fronts every Render service and
+    overwrites it), then `True-Client-IP`, then rightmost `X-Forwarded-For` (local
+    dev only: Render *appends* to a client-sent XFF, so on Render it's forgeable).
+  - **After deploying, sanity-check it:** one wrong password from two different
+    networks (e.g. phone on mobile data + laptop on Wi-Fi) should create two
+    `login_attempts` docs plus `global`. If they share one doc, IP detection is
+    wrong and the per-IP lock is acting like a global one.
 - **CSRF**: `SameSite=Lax` cookie + `lib/origin.ts` rejects non-GET requests
   whose `Origin` host ≠ `Host`.
 - **Stored-XSS guard**: `lib/mime.ts` is the single allowlist (PDF + raster images).
@@ -179,7 +188,8 @@ gets an empty entry name.
 | Upload 507 "Storage is almost full" | hit the 9 GB free-tier cap | delete docs, or raise `STORAGE_CAP_BYTES` in `lib/r2.ts` if you accept billing |
 | Browse/search empty + `FAILED_PRECONDITION` in logs | missing Firestore index | click the index URL Firestore prints in the log |
 | Auto-organize toggle missing | no `GEMINI_API_KEY` | env var |
-| Login says "Too many wrong attempts" for everyone | global backstop tripped | wait 15 min, or delete `login_attempts/global` in Firestore |
+| New device says "Too many wrong attempts" | global backstop tripped (known devices are exempt) | wait 15 min, or delete `login_attempts/global` in Firestore |
+| Everyone locked out after a few wrong tries | client IP detection collapsed to one value | see the sanity check under "Auth model"; fix `clientIp` |
 | Everyone suddenly signed out | password hash or `SESSION_SECRET` changed | expected; sign in again |
 | Login redirect loop / every page 500 | bad/short `SESSION_SECRET` or malformed `HERMES_PASSWORD_HASH` | env vars (throws by design; check server logs) |
 | Folder vanished after deleting its docs | `folders` registry write failed | `lib/folder-store.ts`; folder still works off doc paths |
