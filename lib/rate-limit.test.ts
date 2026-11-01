@@ -72,12 +72,12 @@ describe("decideAttempt", () => {
     let ip: AttemptState | undefined;
     let global: AttemptState | undefined;
     for (let i = 0; i < 5; i++) {
-      const d = decideAttempt(ip, global, 0, false);
+      const d = decideAttempt(ip, global, 0);
       expect(d.lockedMs).toBe(0);
       ip = d.ip;
       global = d.global;
     }
-    const sixth = decideAttempt(ip, global, 0, false);
+    const sixth = decideAttempt(ip, global, 0);
     expect(sixth.lockedMs).toBe(15 * MIN);
     expect(sixth.ip).toBeUndefined(); // a refused attempt writes nothing
     expect(sixth.global).toBeUndefined();
@@ -85,13 +85,25 @@ describe("decideAttempt", () => {
 
   it("lets a known device past the global backstop", () => {
     const global = failN(100, undefined, 0, GLOBAL_POLICY);
-    expect(decideAttempt(undefined, global, 0, false).lockedMs).toBe(15 * MIN);
-    expect(decideAttempt(undefined, global, 0, true).lockedMs).toBe(0);
+    expect(decideAttempt(undefined, global, 0).lockedMs).toBe(15 * MIN);
+    expect(decideAttempt(undefined, global, 0, { state: undefined }).lockedMs).toBe(0);
   });
 
   it("still applies the per-IP lock to a known device", () => {
     const ip = failN(5, undefined, 0);
-    expect(decideAttempt(ip, undefined, 0, true).lockedMs).toBe(15 * MIN);
+    expect(decideAttempt(ip, undefined, 0, { state: undefined }).lockedMs).toBe(15 * MIN);
+  });
+
+  it("caps a known device at 5 attempts across all IPs (leaked cookie can't be replayed)", () => {
+    const global = failN(100, undefined, 0, GLOBAL_POLICY); // backstop tripped
+    let device: AttemptState | undefined;
+    for (let i = 0; i < 5; i++) {
+      // A fresh IP every time — the per-IP limit never kicks in.
+      const d = decideAttempt(undefined, global, 0, { state: device });
+      expect(d.lockedMs).toBe(0);
+      device = d.device;
+    }
+    expect(decideAttempt(undefined, global, 0, { state: device }).lockedMs).toBe(15 * MIN);
   });
 });
 
@@ -104,8 +116,10 @@ describe("clientIp", () => {
       clientIp(req({ "cf-connecting-ip": "1.2.3.4", "x-forwarded-for": "6.6.6.6, 9.9.9.9" })),
     ).toBe("1.2.3.4");
   });
-  it("uses True-Client-IP when CF-Connecting-IP is absent", () => {
-    expect(clientIp(req({ "true-client-ip": "1.2.3.4" }))).toBe("1.2.3.4");
+  it("ignores True-Client-IP (passes through unless the Cloudflare plan sets it)", () => {
+    expect(clientIp(req({ "true-client-ip": "6.6.6.6", "x-forwarded-for": "1.2.3.4" }))).toBe(
+      "1.2.3.4",
+    );
   });
   it("falls back to the rightmost X-Forwarded-For entry (local dev)", () => {
     expect(clientIp(req({ "x-forwarded-for": "6.6.6.6, 1.2.3.4" }))).toBe("1.2.3.4");

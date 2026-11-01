@@ -95,14 +95,22 @@ Pages-Router index. Don't "fix" this by renaming to middleware.ts.
   state is in Firestore so it survives Render restarts. Per IP: 5 attempts/15 min →
   15 min lock, doubling per repeat lockout, capped at 24 h. Global: 100 attempts/h →
   15 min pause, which **known devices skip** (`hermes_device` cookie, set on any
-  successful login, signed with its own key; it's not a credential). That stops a
-  distributed attacker from locking the family out.
+  successful login; it's not a credential). That stops a distributed attacker from
+  locking the family out.
+  - The device cookie carries a random id, and a known device answers to its own
+    bucket (`login_attempts/device-<id>`, same 5/15 min policy as an IP) instead
+    of the global lock. A leaked cookie therefore can't be replayed from many IPs.
+    Its key is bound to the password hash, so a password change voids it.
   - Each attempt is counted *before* the password check, in one Firestore
     transaction with the lock check (`beginLoginAttempt`). A correct password then
-    clears the IP's count. Check-then-record would let parallel guesses slip past.
+    clears the IP's and device's counts. Check-then-record would let parallel
+    guesses slip past.
   - Client IP = `CF-Connecting-IP` (Cloudflare fronts every Render service and
-    overwrites it), then `True-Client-IP`, then rightmost `X-Forwarded-For` (local
-    dev only: Render *appends* to a client-sent XFF, so on Render it's forgeable).
+    overwrites it), then rightmost `X-Forwarded-For` (local dev only: Render
+    *appends* to a client-sent XFF, so on Render it's forgeable). `True-Client-IP`
+    is deliberately ignored: Cloudflare only sets it on some plans, otherwise a
+    client-sent value passes through. If IPs were ever spoofable, the global
+    backstop still caps attackers, since they have no device cookie.
   - **After deploying, sanity-check it:** one wrong password from two different
     networks (e.g. phone on mobile data + laptop on Wi-Fi) should create two
     `login_attempts` docs plus `global`. If they share one doc, IP detection is

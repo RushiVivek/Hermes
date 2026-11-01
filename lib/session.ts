@@ -7,8 +7,9 @@ const ALG = "HS256";
 const TTL = 60 * 60 * 24 * 30; // 30 days
 
 /** "Known device" marker set on successful login. Not a credential — it only
- * exempts the device from the global login backstop (lib/rate-limit.ts).
- * Survives sign-out and password changes; 400 days is the browser maximum. */
+ * swaps the global login backstop for a per-device limit (lib/rate-limit.ts).
+ * Survives sign-out; a password change invalidates it (the key is bound to
+ * the password hash). 400 days is the browser maximum. */
 export const DEVICE_COOKIE_NAME = "hermes_device";
 const DEVICE_TTL = 60 * 60 * 24 * 400;
 
@@ -49,10 +50,11 @@ async function getKey(): Promise<Uint8Array> {
   return deriveKey(getPasswordHash());
 }
 
-/** Device key uses a fixed label (never a valid password hash), so session
- * and device tokens can't be swapped for each other. */
+/** Device key is bound to the password hash too, so a password change voids
+ * every device cookie along with every session. The prefix keeps it distinct
+ * from the session key, so the two token kinds can't be swapped. */
 function getDeviceKey(): Promise<Uint8Array> {
-  return deriveKey("hermes-known-device-v1");
+  return deriveKey(`hermes-known-device-v1:${getPasswordHash()}`);
 }
 
 export async function createSession(): Promise<string> {
@@ -80,8 +82,11 @@ export async function clearSessionCookie() {
 }
 
 export async function setDeviceCookie() {
+  // Random per-device id: rate-limit.ts gives each known device its own
+  // attempt bucket, so a leaked cookie can't be replayed from many IPs.
   const token = await new SignJWT({ device: true })
     .setProtectedHeader({ alg: ALG })
+    .setJti(crypto.randomUUID())
     .setIssuedAt()
     .setExpirationTime(`${DEVICE_TTL}s`)
     .sign(await getDeviceKey());
@@ -95,15 +100,18 @@ export async function setDeviceCookie() {
   });
 }
 
-export async function isKnownDevice(): Promise<boolean> {
+/** The verified device id from the known-device cookie, or null. */
+export async function knownDeviceId(): Promise<string | null> {
   const token = (await cookies()).get(DEVICE_COOKIE_NAME)?.value;
-  if (!token) return false;
+  if (!token) return null;
   const key = await getDeviceKey();
   try {
-    await jwtVerify(token, key, { algorithms: [ALG] });
-    return true;
+    const { payload } = await jwtVerify(token, key, { algorithms: [ALG] });
+    return typeof payload.jti === "string" && /^[0-9a-f-]{36}$/.test(payload.jti)
+      ? payload.jti
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 

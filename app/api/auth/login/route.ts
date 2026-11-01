@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { checkPassword } from "@/lib/password";
 import {
   createSession,
-  isKnownDevice,
+  knownDeviceId,
   setDeviceCookie,
   setSessionCookie,
 } from "@/lib/session";
@@ -20,7 +20,8 @@ export async function POST(req: Request) {
   // Count this attempt before checking the password (atomic with the lock
   // check), so parallel guesses can't all slip past the limit.
   const ip = clientIp(req);
-  const lockedMs = await beginLoginAttempt(ip, await isKnownDevice());
+  const deviceId = await knownDeviceId();
+  const lockedMs = await beginLoginAttempt(ip, deviceId);
   if (lockedMs > 0) {
     const minutes = Math.ceil(lockedMs / 60_000);
     return NextResponse.json(
@@ -51,7 +52,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Wrong password" }, { status: 401 });
   }
 
-  await clearLoginFailures(ip);
+  await clearLoginFailures(ip, deviceId);
   const token = await createSession();
   await setSessionCookie(token);
   await setDeviceCookie();
