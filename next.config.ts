@@ -1,4 +1,17 @@
+import { networkInterfaces } from "node:os";
 import type { NextConfig } from "next";
+
+/** This machine's private IPv4 addresses, so phones/laptops on the LAN can
+ * use the dev server at http://<ip>:28085. Exact addresses rather than a
+ * wildcard: Next matches patterns label-by-label, so "192.168.*.*" would
+ * also allow a hostname like "192.168.evil.example". Read at startup —
+ * restart `npm run dev` if the IP changes. */
+function lanAddresses(): string[] {
+  return Object.values(networkInterfaces())
+    .flat()
+    .filter((a) => a && a.family === "IPv4" && !a.internal)
+    .map((a) => a!.address);
+}
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -10,6 +23,11 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Dev only (ignored by `next start`): `next dev` refuses its own scripts
+  // and hot-reload socket (403) to any origin but localhost, which breaks
+  // the page — login included — when opened via the local Caddy domain or
+  // the LAN IP. Allow exactly those.
+  allowedDevOrigins: ["hermes.test", ...lanAddresses()],
   experimental: {
     // We use proxy.ts (middleware), so Next buffers each request body through
     // the proxy with a default 10MB cap. A batch of phone photos / scanned
