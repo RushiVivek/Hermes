@@ -77,8 +77,13 @@ describe("applyFilters", () => {
     expect(out.map((d) => d.id)).toEqual(["4"]);
   });
 
-  it("category + free_text that matches nothing returns empty", () => {
+  it("category + free_text: the words decide, the guessed category doesn't hide matches", () => {
     const out = applyFilters(docs, { category: "Medical", free_text: "passport" }, "medical passport");
+    expect(out.map((d) => d.id).sort()).toEqual(["1", "2"]);
+  });
+
+  it("category + free_text that matches nothing returns empty", () => {
+    const out = applyFilters(docs, { category: "Medical", free_text: "pension" }, "medical pension");
     expect(out).toEqual([]);
   });
 
@@ -143,6 +148,15 @@ describe("request filler words", () => {
   it("wrong AI category falls back to keywords without the filler words", () => {
     const q = "Find rushi's id";
     expect(applyFilters([d], { category: "ID & Government", owner: "Rushi" }, q)).toHaveLength(1);
+  });
+  it("a guessed category doesn't hide matching docs filed elsewhere", () => {
+    const aadhaar = doc({ title: "Aadhaar Card", owner: "Rushi", path: "ID & Government/Aadhaar", category: "ID & Government" });
+    const res = applyFilters([d, aadhaar], { category: "ID & Government", owner: "Rushi", free_text: "id" }, "Find rushi's id");
+    expect(res.map((x) => x.title).sort()).toEqual(["Aadhaar Card", "ID Card"]);
+  });
+  it("a category with no leftover words still filters by category", () => {
+    const aadhaar = doc({ title: "Aadhaar Card", owner: "Rushi", category: "ID & Government" });
+    expect(applyFilters([d, aadhaar], { category: "Education", owner: "Rushi" }, "Rushi's education documents")).toEqual([d]);
   });
   it("a query of only filler words matches nothing", () => {
     expect(matchesText(d, "find me all")).toBe(false);

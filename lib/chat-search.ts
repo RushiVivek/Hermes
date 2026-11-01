@@ -67,7 +67,12 @@ function filterOnce(docs: Doc[], f: QueryFilters, rawQuery: string): Doc[] {
   const skipTextGate = hasStructured && !(f.free_text ?? "").trim();
 
   return docs.filter((d) => {
-    if (f.category && d.category !== f.category) return false;
+    // Category only narrows a pure category request ("Rushi's medical
+    // documents"). With leftover words the parser's category is a guess from
+    // a type word — "id" → ID & Government — that would hide a college ID
+    // card filed under Education, so the words decide instead.
+    const textDecides = Boolean((f.free_text ?? "").trim());
+    if (f.category && !textDecides && d.category !== f.category) return false;
     if (f.owner && (d.owner ?? "").toLowerCase() !== f.owner.toLowerCase())
       return false;
     if (f.path_prefix && !isUnderPath(d.path, f.path_prefix)) return false;
