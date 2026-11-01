@@ -15,7 +15,7 @@ services:
     plan: free            # free tier spins down after ~15min idle (~30s cold start)
     region: singapore     # closest Render region to India; change if you prefer
     branch: main
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci --include=dev && npm run build   # NODE_ENV=production would otherwise skip devDeps (tailwind, typescript) needed to build
     startCommand: npm run start
     healthCheckPath: /api/health
     autoDeploy: true
