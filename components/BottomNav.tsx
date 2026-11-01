@@ -5,8 +5,8 @@ import { usePathname } from "next/navigation";
 
 const tabs = [
   { href: "/browse", label: "Browse", icon: FolderIcon },
-  { href: "/chat", label: "Chat", icon: ChatIcon },
-  { href: "/upload", label: "Upload", icon: UploadIcon },
+  { href: "/chat", label: "Find", icon: SearchIcon },
+  { href: "/upload", label: "Add", icon: UploadIcon },
 ];
 
 export default function BottomNav() {
@@ -15,7 +15,10 @@ export default function BottomNav() {
   if (pathname === "/login") return null;
 
   return (
-    <nav className="fixed bottom-0 inset-x-0 z-40 border-t border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
+    <nav
+      aria-label="Main"
+      className="fixed bottom-0 inset-x-0 z-40 border-t border-zinc-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95"
+    >
       <div className="mx-auto flex max-w-3xl">
         {tabs.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || pathname.startsWith(href + "/");
@@ -23,14 +26,22 @@ export default function BottomNav() {
             <Link
               key={href}
               href={href}
-              className={`flex flex-1 flex-col items-center justify-center gap-1 py-3 text-xs ${
+              aria-current={active ? "page" : undefined}
+              className={`group flex flex-1 flex-col items-center justify-center gap-1 py-2 text-xs font-medium transition-colors ${
                 active
-                  ? "text-zinc-950 dark:text-zinc-50"
-                  : "text-zinc-500 dark:text-zinc-500"
+                  ? "text-primary"
+                  : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
               }`}
-              style={{ minHeight: 56 }}
+              style={{ minHeight: 60 }}
             >
-              <Icon active={active} />
+              {/* Pill behind the active icon: state shown by shape + colour, not colour alone. */}
+              <span
+                className={`flex h-8 w-14 items-center justify-center rounded-full transition-colors ${
+                  active ? "bg-primary-soft" : "group-active:bg-zinc-100 dark:group-active:bg-zinc-800"
+                }`}
+              >
+                <Icon active={active} />
+              </span>
               <span>{label}</span>
             </Link>
           );
@@ -42,26 +53,26 @@ export default function BottomNav() {
 
 function FolderIcon({ active }: { active: boolean }) {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.2 : 1.7}>
+    <svg aria-hidden width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.2 : 1.75} strokeLinejoin="round">
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
     </svg>
   );
 }
 
-function ChatIcon({ active }: { active: boolean }) {
+function SearchIcon({ active }: { active: boolean }) {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.2 : 1.7}>
-      <path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-6l-4 4v-4H6a2 2 0 0 1-2-2V6Z" />
+    <svg aria-hidden width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.2 : 1.75} strokeLinecap="round">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
     </svg>
   );
 }
 
 function UploadIcon({ active }: { active: boolean }) {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.2 : 1.7} strokeLinecap="round">
-      <path d="M12 4v12" />
-      <path d="m6 10 6-6 6 6" />
-      <path d="M4 20h16" />
+    <svg aria-hidden width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.2 : 1.75} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
     </svg>
   );
 }
