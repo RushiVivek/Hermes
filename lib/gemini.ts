@@ -9,7 +9,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { CATEGORIES, type Category } from "./types";
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-3.5-flash";
 // Cap input we send to Gemini. Above this, classification accuracy doesn't
 // improve and we'd just burn quota / latency. The blob itself is already on
 // R2 at full size; this only limits what we send the model.

@@ -19,8 +19,23 @@ export function tokenize(text: string): string[] {
     .filter((w) => w.length >= 2);
 }
 
+/** Request phrasing ("find", "search for", "show me my …") that says how to
+ * search, not what to search for. Dropped from query words only, so "Find
+ * Rushi's ID" is searched as "rushi id" instead of requiring a doc that
+ * contains the word "find". */
+const FILLER_WORDS = new Set([
+  "find", "search", "look", "looking", "show", "get", "fetch", "give", "open",
+  "where", "is", "are", "for", "me", "my", "the", "an", "of", "please", "pls",
+  "can", "you", "all", "up", "want", "need", "to",
+]);
+
+/** Query words worth matching: tokenized, minus request filler. */
+export function queryTerms(text: string): string[] {
+  return tokenize(text).filter((w) => !FILLER_WORDS.has(w));
+}
+
 export function matchesText(d: Doc, text: string): boolean {
-  const needles = tokenize(text);
+  const needles = queryTerms(text);
   // No usable search words (e.g. "a a a", punctuation only) → matches nothing.
   // matchesText is only called as a *gate* in filterOnce, so returning false
   // here prevents a content-less query from dumping the whole vault.
@@ -87,7 +102,7 @@ export function applyFilters(
 }
 
 export function rankAndTrim(docs: Doc[], freeText: string): Doc[] {
-  const needles = tokenize(freeText);
+  const needles = queryTerms(freeText);
   const score = (d: Doc) => {
     const title = d.title.toLowerCase();
     let s = 0;

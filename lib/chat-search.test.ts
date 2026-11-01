@@ -131,6 +131,24 @@ describe("applyFilters", () => {
   });
 });
 
+describe("request filler words", () => {
+  const d = doc({ title: "ID Card", owner: "Rushi", path: "Education/College", category: "Education" });
+  it.each(["Find rushi's id", "Search for rushi's id", "show me rushi id", "Rushi's id", "rushi id"])(
+    "%s matches on the meaningful words only",
+    (q) => {
+      expect(matchesText(d, q)).toBe(true);
+      expect(applyFilters([d], { free_text: q }, q)).toHaveLength(1);
+    },
+  );
+  it("wrong AI category falls back to keywords without the filler words", () => {
+    const q = "Find rushi's id";
+    expect(applyFilters([d], { category: "ID & Government", owner: "Rushi" }, q)).toHaveLength(1);
+  });
+  it("a query of only filler words matches nothing", () => {
+    expect(matchesText(d, "find me all")).toBe(false);
+  });
+});
+
 describe("matchesText empty-needle guard", () => {
   it("returns false when the query has no usable tokens", () => {
     expect(matchesText(doc({ title: "Anything" }), "a , . -")).toBe(false);
