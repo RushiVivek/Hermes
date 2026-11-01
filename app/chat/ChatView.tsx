@@ -97,6 +97,16 @@ export default function ChatView() {
 
         {resp && !busy && (
           <div className="mt-5">
+            {/* Gemini was unreachable, so the server did a plain keyword match:
+                every word must appear in the document's name, owner, folder or
+                tags. Say so, or a miss looks like the document isn't there. */}
+            {!resp.usedAI && (
+              <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                <span className="font-medium">Smart search is unavailable right now.</span>{" "}
+                Only exact words are matched, so use words from the document&apos;s name, owner or
+                folder, like &ldquo;Mother passport&rdquo;.
+              </p>
+            )}
             {resp.results.length === 0 ? (
               <div className="rounded-xl border border-dashed border-zinc-300 bg-white p-6 text-center dark:border-zinc-700 dark:bg-zinc-900">
                 <p role="status" className="text-zinc-700 dark:text-zinc-300">
